@@ -118,6 +118,123 @@ spec:
 
 To see other examples, go to [our docs](https://kube-green.dev/docs/configuration/#examples).
 
+## Extensions
+
+This fork includes extended functionality for managing Custom Resource Definitions (CRDs) like PgCluster, HDFSCluster, and PgBouncer, along with a helper script for multi-tenant environments.
+
+### Extended CRD Support
+
+This fork extends kube-green with native support for managing these CRDs:
+
+- **PgCluster**: PostgreSQL clusters managed by the postgres-operator
+- **HDFSCluster**: HDFS clusters managed by the hdfs-operator  
+- **PgBouncer**: PgBouncer instances managed by the postgres-operator
+
+These CRDs are managed through annotation-based patches:
+- PgCluster: `pgcluster.stratio.com/shutdown=true|false`
+- HDFSCluster: `hdfscluster.stratio.com/shutdown=true|false`
+- PgBouncer: `spec.instances` field (native support)
+
+### Staged Wake-Up
+
+The extended version supports staged wake-up sequences to ensure proper service dependencies:
+1. Postgres and HDFS clusters (needed for all services)
+2. PgBouncer instances (5 minutes after, depends on Postgres)
+3. Native Deployments/StatefulSets (7 minutes after, depend on databases)
+
+### tenant_power.py Helper Script
+
+For multi-tenant environments, use the `tenant_power.py` script to easily configure sleep/wake schedules. This script simplifies management by:
+
+- Automatically converting local time (America/Bogota) to UTC
+- Adjusting weekdays based on timezone conversion
+- Creating SleepInfo configurations for all namespaces
+- Applying staged wake-up sequences
+- Managing Postgres, HDFS, PgBouncer, and native applications
+
+#### Prerequisites
+
+```bash
+pip install ruamel.yaml
+```
+
+#### Quick Start Examples
+
+**Example 1: Configure all services to sleep Monday-Friday at 10 PM and wake at 6 AM**
+
+```bash
+python3 tenant_power.py create --tenant bdadevprd --off 22:00 --on 06:00 \
+    --weekdays "lunes-viernes" --apply
+```
+
+**Example 2: Configure only a specific namespace (airflowsso) to sleep Friday at 11 PM and wake Monday at 6 AM**
+
+```bash
+python3 tenant_power.py create --tenant bdadevprd --off 23:00 --on 06:00 \
+    --sleepdays "viernes" --wakedays "lunes" --namespaces airflowsso --apply
+```
+
+**Example 3: Generate YAML file without applying (useful for review)**
+
+```bash
+python3 tenant_power.py create --tenant bdadevprd --off 22:00 --on 06:00 \
+    --weekdays "lunes-viernes" --outdir ./yamls
+```
+
+**Example 4: View current configurations**
+
+```bash
+python3 tenant_power.py show --tenant bdadevprd
+```
+
+**Example 5: Update existing configurations**
+
+```bash
+python3 tenant_power.py update --tenant bdadevprd --off 23:00 --on 07:00 \
+    --weekdays "lunes-viernes" --apply
+```
+
+#### Available Commands
+
+- **create**: Create new sleep/wake configurations for a tenant
+- **update**: Update existing configurations
+- **show**: Display current configurations in a human-readable format
+
+#### Command Options
+
+- `--tenant`: Tenant name (required, e.g., `bdadevprd`, `bdadevdat`, `bdadevlab`)
+- `--off`: Sleep time in local timezone (required, format `HH:MM`, e.g., `22:00`, `14:15`)
+- `--on`: Wake time in local timezone (required, format `HH:MM`, e.g., `06:00`, `14:25`)
+- `--weekdays`: Days of the week (default: all days). Can use human format (`"lunes-viernes"`, `"sábado"`) or numeric (`"1-5"`, `"6"`)
+- `--sleepdays`: (Optional) Specific days for sleep. If not specified, uses `--weekdays`
+- `--wakedays`: (Optional) Specific days for wake. If not specified, uses `--weekdays`
+- `--namespaces`: (Optional) Limit to specific namespaces. Valid values: `datastores`, `apps`, `rocket`, `intelligence`, `airflowsso`
+- `--apply`: Apply changes directly to Kubernetes cluster (without this, only generates YAML)
+- `--outdir`: Directory to save generated YAML file (when not using `--apply`)
+
+#### Supported Namespaces
+
+The script manages these namespace types:
+- **datastores**: Databases (Postgres, HDFS, PgBouncer)
+- **apps**: Main applications
+- **rocket**: Rocket services
+- **intelligence**: Intelligence services
+- **airflowsso**: Airflow SSO services
+
+For more detailed usage, run:
+
+```bash
+python3 tenant_power.py --help
+```
+
+Or for specific command help:
+
+```bash
+python3 tenant_power.py create --help
+python3 tenant_power.py update --help
+python3 tenant_power.py show --help
+```
+
 ## Contributing
 
 Please read [CONTRIBUTING.md](CONTRIBUTING.md) for details on our code of conduct, and the process for submitting pull requests to us.
