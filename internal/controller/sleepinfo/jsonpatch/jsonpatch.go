@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/kube-green/kube-green/api/v1alpha1"
 	"github.com/kube-green/kube-green/internal/controller/sleepinfo/resource"
@@ -57,8 +58,12 @@ func NewResources(ctx context.Context, res resource.ResourceClient, namespace st
 			continue
 		}
 		if len(generic.data) == 0 {
+			// EXTENSIÓN: Log cuando no se encuentran recursos para un patch target (útil para debugging CRDs)
+			res.Log.Info("no resources found for patch target", "target", patchData.Target.String(), "namespace", namespace)
 			continue
 		}
+		// EXTENSIÓN: Log cuando se encuentran recursos (útil para debugging CRDs)
+		res.Log.Info("resources found for patch target", "target", patchData.Target.String(), "count", len(generic.data), "namespace", namespace)
 
 		resources.resMapping[patchData.Target] = generic
 	}
@@ -99,10 +104,15 @@ func (g managedResources) Sleep(ctx context.Context) error {
 			// Some examples are:
 			// - Pod managed by ReplicaSet managed by Deployment
 			// - Pod managed by Job managed by CronJob
-			if metav1.GetControllerOfNoCopy(&resource) != nil {
+			// EXCEPCIÓN: No saltar CRDs (PgBouncer, PgCluster, HDFSCluster) aunque tengan ownerReferences,
+			// ya que estos son recursos de nivel superior que debemos gestionar directamente.
+			resourceKind := resource.GetKind()
+			isCRD := resourceKind == "PgBouncer" || resourceKind == "PgCluster" || resourceKind == "HDFSCluster"
+
+			if metav1.GetControllerOfNoCopy(&resource) != nil && !isCRD {
 				g.logger.Info("resource is managed by another controller, skipped",
 					"resourceName", resource.GetName(),
-					"resourceKind", resource.GetKind(),
+					"resourceKind", resourceKind,
 					"patch", resourceWrapper.patchData.Patch,
 				)
 				continue
@@ -168,11 +178,17 @@ func (g managedResources) WakeUp(ctx context.Context) error {
 		}
 
 		for _, resource := range resourceWrapper.data {
-			rawPatch, ok := resourceWrapper.restorePatches[resource.GetName()]
-			if !ok {
-				g.logger.Info("no restore patch found for resource, skipped",
+			// Skip resources managed by another controller
+			// EXCEPCIÓN: No saltar CRDs (PgBouncer, PgCluster, HDFSCluster) aunque tengan ownerReferences,
+			// ya que estos son recursos de nivel superior que debemos gestionar directamente.
+			resourceKind := resource.GetKind()
+			isCRD := resourceKind == "PgBouncer" || resourceKind == "PgCluster" || resourceKind == "HDFSCluster"
+
+			if metav1.GetControllerOfNoCopy(&resource) != nil && !isCRD {
+				g.logger.Info("resource is managed by another controller, skipped",
 					"resourceName", resource.GetName(),
-					"resourceKind", resource.GetKind(),
+					"resourceKind", resourceKind,
+					"patch", resourceWrapper.patchData.Patch,
 				)
 				continue
 			}
@@ -182,6 +198,154 @@ func (g managedResources) WakeUp(ctx context.Context) error {
 				return fmt.Errorf("%w: %s", ErrJSONPatch, err)
 			}
 
+			// EXTENSIÓN PRIORITARIA: Para CRDs con patches dinámicos (PgCluster, HDFSCluster),
+			// aplicar el patch de WAKE directamente sin verificar el restore patch.
+			// Estos patches están diseñados para ser aplicados siempre, independientemente del estado del restore patch.
+			isCRDWithDynamicPatch := resourceKind == "PgCluster" || resourceKind == "HDFSCluster"
+
+			if isCRDWithDynamicPatch && resourceWrapper.patchData.Patch != "" {
+				// Para CRDs con patches dinámicos, aplicar el patch directamente sin verificar restore patch
+				g.logger.Info("applying dynamic patch for CRD (ignoring restore patch verification)",
+					"resourceName", resource.GetName(),
+					"resourceKind", resourceKind,
+					"patch", resourceWrapper.patchData.Patch,
+				)
+
+				modified, err := patcherFn.Exec(current)
+				if err != nil {
+					// EXTENSIÓN: Manejar casos donde el patch falla por operación incorrecta
+					// Los patches de WAKE usan "replace" pero si falla, intentar con "add"
+					patchStr := resourceWrapper.patchData.Patch
+					if strings.Contains(patchStr, "annotations") {
+						if strings.Contains(patchStr, "op: replace") {
+							// Si replace falla (anotación no existe, aunque debería), intentar con add
+							patchStrAdd := strings.Replace(patchStr, "op: replace", "op: add", 1)
+							fallbackPatcher, fallbackErr := patcher.New([]byte(patchStrAdd))
+							if fallbackErr == nil {
+								modified, err = fallbackPatcher.Exec(current)
+								if err == nil {
+									g.logger.V(8).Info("patch replace failed, successfully used add instead",
+										"resourceName", resource.GetName(),
+										"resourceKind", resourceKind,
+									)
+								}
+							}
+						}
+					}
+
+					if err != nil {
+						g.logger.Error(err, "fails to apply dynamic patch",
+							"resourceName", resource.GetName(),
+							"resourceKind", resourceKind,
+							"patch", resourceWrapper.patchData.Patch,
+						)
+						continue
+					}
+				}
+
+				res := &unstructured.Unstructured{}
+				if err := json.Unmarshal(modified, &res.Object); err != nil {
+					return fmt.Errorf("%w: %s", ErrJSONPatch, err)
+				}
+
+				if err := resourceWrapper.SSAPatch(ctx, res); err != nil {
+					return fmt.Errorf("%w: %s", ErrJSONPatch, err)
+				}
+				g.logger.Info("dynamic patch applied successfully for wake",
+					"resourceName", resource.GetName(),
+					"resourceKind", resourceKind,
+				)
+				resourceWrapper.isCacheInvalid = true
+				continue
+			}
+
+			rawPatch, ok := resourceWrapper.restorePatches[resource.GetName()]
+			if !ok {
+				// EXTENSIÓN: Si no hay restore patch pero hay un patch definido, aplicar el patch directamente
+				// Esto permite que SleepInfos de wake con patches funcionen sin necesidad de restore patches
+				// (útil para recursos gestionados por operadores que se crean/eliminan dinámicamente)
+				// IMPORTANTE: El operador restaurará las réplicas automáticamente basándose en el spec original del recurso
+				if resourceWrapper.patchData.Patch != "" {
+					g.logger.Info("no restore patch found, applying patch directly for wake",
+						"resourceName", resource.GetName(),
+						"resourceKind", resource.GetKind(),
+						"patch", resourceWrapper.patchData.Patch,
+					)
+
+					modified, err := patcherFn.Exec(current)
+					if err != nil {
+						// EXTENSIÓN: Manejar casos donde el patch falla por operación incorrecta
+						// - Si falla con "add" (anotación ya existe), intentar con "replace"
+						// - Si falla con "replace" (anotación no existe), intentar con "add"
+						patchStr := resourceWrapper.patchData.Patch
+						if strings.Contains(patchStr, "annotations") {
+							var fallbackPatcher *patcher.Patcher
+							var fallbackErr error
+
+							if strings.Contains(patchStr, "op: add") {
+								// Intentar con replace si add falla
+								patchStrReplace := strings.Replace(patchStr, "op: add", "op: replace", 1)
+								fallbackPatcher, fallbackErr = patcher.New([]byte(patchStrReplace))
+								if fallbackErr == nil {
+									modified, err = fallbackPatcher.Exec(current)
+									if err == nil {
+										g.logger.V(8).Info("patch add failed, successfully used replace instead",
+											"resourceName", resource.GetName(),
+											"resourceKind", resource.GetKind(),
+										)
+									}
+								}
+							} else if strings.Contains(patchStr, "op: replace") {
+								// Intentar con add si replace falla (anotación no existe)
+								patchStrAdd := strings.Replace(patchStr, "op: replace", "op: add", 1)
+								fallbackPatcher, fallbackErr = patcher.New([]byte(patchStrAdd))
+								if fallbackErr == nil {
+									modified, err = fallbackPatcher.Exec(current)
+									if err == nil {
+										g.logger.V(8).Info("patch replace failed, successfully used add instead",
+											"resourceName", resource.GetName(),
+											"resourceKind", resource.GetKind(),
+										)
+									}
+								}
+							}
+						}
+
+						if err != nil {
+							g.logger.Error(err, "fails to apply patch (tried original and fallback)",
+								"resourceName", resource.GetName(),
+								"resourceKind", resource.GetKind(),
+								"patch", resourceWrapper.patchData.Patch,
+							)
+							continue
+						}
+					}
+
+					res := &unstructured.Unstructured{}
+					if err := json.Unmarshal(modified, &res.Object); err != nil {
+						return fmt.Errorf("%w: %s", ErrJSONPatch, err)
+					}
+
+					if err := resourceWrapper.SSAPatch(ctx, res); err != nil {
+						return fmt.Errorf("%w: %s", ErrJSONPatch, err)
+					}
+					g.logger.Info("patch applied successfully for wake (operator will restore replicas from spec)",
+						"resourceName", resource.GetName(),
+						"resourceKind", resource.GetKind(),
+					)
+					resourceWrapper.isCacheInvalid = true
+					continue
+				}
+
+				// Si no hay restore patch y no hay patch, omitir (comportamiento original para Deployments/StatefulSets)
+				g.logger.Info("no restore patch found for resource, skipped",
+					"resourceName", resource.GetName(),
+					"resourceKind", resource.GetKind(),
+				)
+				continue
+			}
+
+			// Comportamiento original: usar restore patch si está disponible (solo para recursos nativos y PgBouncer)
 			isResourceChanged, err := patcherFn.IsResourceChanged(current)
 			if err != nil {
 				g.logger.Error(err, "fails to calculate if resource is changed",

@@ -119,12 +119,55 @@ func (r *SleepInfoReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 	scheduleLog.WithValues("last schedule", now, "status", sleepInfo.Status).Info("last schedule value")
 
+	// EXTENSIÓN: Si es operación WAKE_UP, buscar restore patches de SleepInfos relacionados
+	restorePatches := sleepInfoData.OriginalGenericResourceInfo
+	if sleepInfoData.IsWakeUpOperation() {
+		relatedPatches, err := getRelatedRestorePatches(ctx, r.Client, log, sleepInfo, req.Namespace)
+		if err != nil {
+			log.Error(err, "failed to get related restore patches, using current ones")
+		} else if relatedPatches != nil && len(relatedPatches) > 0 {
+			// Combinar restore patches: primero los relacionados, luego los del actual (el actual tiene prioridad)
+			log.Info("usando restore patches de SleepInfo relacionado", "count", len(relatedPatches))
+			if restorePatches == nil {
+				restorePatches = make(map[string]jsonpatch.RestorePatches)
+			}
+			for key, patches := range relatedPatches {
+				if _, exists := restorePatches[key]; !exists {
+					restorePatches[key] = patches
+				}
+			}
+		}
+	}
+
+	// EXTENSIÓN: Agregar patches dinámicos para PgCluster y HDFSCluster según operación
+	// Los patches de anotaciones dependen de si es SLEEP (shutdown=true) o WAKE (shutdown=false)
+	sleepInfoWithPatches := sleepInfo.DeepCopy()
+	if sleepInfoData.IsSleepOperation() {
+		if sleepInfo.IsPostgresToSuspend() {
+			sleepInfoWithPatches.Spec.Patches = append(sleepInfoWithPatches.Spec.Patches, kubegreenv1alpha1.PgclusterSleepPatch)
+			log.Info("added pgcluster sleep patch", "sleepinfo", sleepInfo.GetName(), "namespace", req.Namespace)
+		}
+		if sleepInfo.IsHdfsToSuspend() {
+			sleepInfoWithPatches.Spec.Patches = append(sleepInfoWithPatches.Spec.Patches, kubegreenv1alpha1.HdfsclusterSleepPatch)
+			log.Info("added hdfscluster sleep patch", "sleepinfo", sleepInfo.GetName(), "namespace", req.Namespace)
+		}
+	} else if sleepInfoData.IsWakeUpOperation() {
+		if sleepInfo.IsPostgresToSuspend() {
+			sleepInfoWithPatches.Spec.Patches = append(sleepInfoWithPatches.Spec.Patches, kubegreenv1alpha1.PgclusterWakePatch)
+			log.Info("added pgcluster wake patch", "sleepinfo", sleepInfo.GetName(), "namespace", req.Namespace)
+		}
+		if sleepInfo.IsHdfsToSuspend() {
+			sleepInfoWithPatches.Spec.Patches = append(sleepInfoWithPatches.Spec.Patches, kubegreenv1alpha1.HdfsclusterWakePatch)
+			log.Info("added hdfscluster wake patch", "sleepinfo", sleepInfo.GetName(), "namespace", req.Namespace)
+		}
+	}
+
 	resources, err := jsonpatch.NewResources(ctx, resource.ResourceClient{
 		Client:           r.Client,
-		SleepInfo:        sleepInfo,
+		SleepInfo:        sleepInfoWithPatches,
 		Log:              log,
 		FieldManagerName: r.ManagerName,
-	}, req.Namespace, sleepInfoData.OriginalGenericResourceInfo)
+	}, req.Namespace, restorePatches)
 	if err != nil {
 		log.Error(err, "fails to get resources")
 		return ctrl.Result{}, err

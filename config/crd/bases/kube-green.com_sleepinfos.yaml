@@ -134,10 +134,29 @@ spec:
                   of the namespace will not be suspended. By default Deployment will
                   be suspended.
                 type: boolean
+              suspendDeploymentsPgbouncer:
+                description: |-
+                  If SuspendDeploymentsPgbouncer is set to true, on sleep all PgBouncer CRDs in the namespace
+                  will be managed by modifying spec.instances (similar to native deployments with spec.replicas).
+                  NOTE: PgBouncer is a CRD that generates Deployments (not StatefulSets), hence the "Deployments" prefix.
+                  Defaults to false (does not manage PgBouncer).
+                type: boolean
               suspendStatefulSets:
                 description: If SuspendStatefulSets is set to false, on sleep the
                   statefulset of the namespace will not be suspended. By default StatefulSet
                   will be suspended.
+                type: boolean
+              suspendStatefulSetsHdfs:
+                description: |-
+                  If SuspendStatefulSetsHdfs is set to true, on sleep all HDFSCluster CRDs in the namespace
+                  will be managed by applying the hdfscluster.stratio.com/shutdown annotation.
+                  Defaults to false (does not manage HDFSCluster).
+                type: boolean
+              suspendStatefulSetsPostgres:
+                description: |-
+                  If SuspendStatefulSetsPostgres is set to true, on sleep all PgCluster CRDs in the namespace
+                  will be managed by applying the pgcluster.stratio.com/shutdown annotation.
+                  Defaults to false (does not manage PgCluster).
                 type: boolean
               timeZone:
                 description: |-

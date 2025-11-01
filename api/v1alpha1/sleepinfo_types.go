@@ -81,6 +81,25 @@ type SleepInfoSpec struct {
 	// +optional
 	// +operator-sdk:csv:customresourcedefinitions:type=spec
 	SuspendStatefulSets *bool `json:"suspendStatefulSets,omitempty"`
+	// If SuspendDeploymentsPgbouncer is set to true, on sleep all PgBouncer CRDs in the namespace
+	// will be managed by modifying spec.instances (similar to native deployments with spec.replicas).
+	// NOTE: PgBouncer is a CRD that generates Deployments (not StatefulSets), hence the "Deployments" prefix.
+	// Defaults to false (does not manage PgBouncer).
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
+	SuspendDeploymentsPgbouncer *bool `json:"suspendDeploymentsPgbouncer,omitempty"`
+	// If SuspendStatefulSetsPostgres is set to true, on sleep all PgCluster CRDs in the namespace
+	// will be managed by applying the pgcluster.stratio.com/shutdown annotation.
+	// Defaults to false (does not manage PgCluster).
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
+	SuspendStatefulSetsPostgres *bool `json:"suspendStatefulSetsPostgres,omitempty"`
+	// If SuspendStatefulSetsHdfs is set to true, on sleep all HDFSCluster CRDs in the namespace
+	// will be managed by applying the hdfscluster.stratio.com/shutdown annotation.
+	// Defaults to false (does not manage HDFSCluster).
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
+	SuspendStatefulSetsHdfs *bool `json:"suspendStatefulSetsHdfs,omitempty"`
 	// Patches is a list of json 6902 patches to apply to the target resources.
 	// +optional
 	// +operator-sdk:csv:customresourcedefinitions:type=spec
@@ -199,6 +218,27 @@ func (s SleepInfo) IsStatefulSetsToSuspend() bool {
 	return *s.Spec.SuspendStatefulSets
 }
 
+func (s SleepInfo) IsPgbouncerToSuspend() bool {
+	if s.Spec.SuspendDeploymentsPgbouncer == nil {
+		return false
+	}
+	return *s.Spec.SuspendDeploymentsPgbouncer
+}
+
+func (s SleepInfo) IsPostgresToSuspend() bool {
+	if s.Spec.SuspendStatefulSetsPostgres == nil {
+		return false
+	}
+	return *s.Spec.SuspendStatefulSetsPostgres
+}
+
+func (s SleepInfo) IsHdfsToSuspend() bool {
+	if s.Spec.SuspendStatefulSetsHdfs == nil {
+		return false
+	}
+	return *s.Spec.SuspendStatefulSetsHdfs
+}
+
 func (s SleepInfo) GetPatches() []Patch {
 	patches := []Patch{}
 	if s.IsDeploymentsToSuspend() {
@@ -210,6 +250,12 @@ func (s SleepInfo) GetPatches() []Patch {
 	if s.IsCronjobsToSuspend() {
 		patches = append(patches, cronjobPatch)
 	}
+	// EXTENSIÓN: Patches para CRDs
+	if s.IsPgbouncerToSuspend() {
+		patches = append(patches, pgbouncerPatch)
+	}
+	// NOTA: Patches para PgCluster y HDFSCluster se agregan dinámicamente según operación (SLEEP/WAKE)
+	// en el controller, ya que dependen de la anotación (true para sleep, false para wake)
 	return append(patches, s.Spec.Patches...)
 }
 

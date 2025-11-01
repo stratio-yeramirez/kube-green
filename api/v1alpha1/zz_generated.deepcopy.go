@@ -151,6 +151,21 @@ func (in *SleepInfoSpec) DeepCopyInto(out *SleepInfoSpec) {
 		*out = new(bool)
 		**out = **in
 	}
+	if in.SuspendDeploymentsPgbouncer != nil {
+		in, out := &in.SuspendDeploymentsPgbouncer, &out.SuspendDeploymentsPgbouncer
+		*out = new(bool)
+		**out = **in
+	}
+	if in.SuspendStatefulSetsPostgres != nil {
+		in, out := &in.SuspendStatefulSetsPostgres, &out.SuspendStatefulSetsPostgres
+		*out = new(bool)
+		**out = **in
+	}
+	if in.SuspendStatefulSetsHdfs != nil {
+		in, out := &in.SuspendStatefulSetsHdfs, &out.SuspendStatefulSetsHdfs
+		*out = new(bool)
+		**out = **in
+	}
 	if in.Patches != nil {
 		in, out := &in.Patches, &out.Patches
 		*out = make([]Patch, len(*in))

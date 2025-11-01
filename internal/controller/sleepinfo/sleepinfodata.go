@@ -47,6 +47,19 @@ func getSleepInfoData(secret *v1.Secret, sleepInfo *kubegreenv1alpha1.SleepInfo)
 		sleepInfoData.NextOperationSchedule = sleepSchedule
 	}
 
+	// EXTENSIÓN: Detectar WAKE usando anotación pair-role cuando no hay wakeUpSchedule
+	// Esto permite que SleepInfos separados (sleep-* y wake-*) funcionen correctamente
+	// Debe estar ANTES de leer el Secret para que funcione también en primera ejecución
+	pairRole := sleepInfo.GetAnnotations()["kube-green.stratio.com/pair-role"]
+	if wakeUpSchedule == "" && pairRole == "wake" {
+		// Si no hay wakeUpSchedule pero tiene pair-role=wake, es una operación WAKE
+		// El sleepAt en este caso es la hora de WAKE (no de SLEEP)
+		sleepInfoData.CurrentOperationType = wakeUpOperation
+	} else if wakeUpSchedule == "" && pairRole == "sleep" {
+		// Si no hay wakeUpSchedule pero tiene pair-role=sleep, es definitivamente una operación SLEEP
+		sleepInfoData.CurrentOperationType = sleepOperation
+	}
+
 	if secret == nil || secret.Data == nil {
 		return sleepInfoData, nil
 	}
@@ -70,11 +83,23 @@ func getSleepInfoData(secret *v1.Secret, sleepInfo *kubegreenv1alpha1.SleepInfo)
 
 	lastOperation := string(data[lastOperationKey])
 
-	if lastOperation == sleepOperation && wakeUpSchedule != "" {
-		sleepInfoData.CurrentOperationSchedule = wakeUpSchedule
-		sleepInfoData.NextOperationSchedule = sleepSchedule
-		sleepInfoData.CurrentOperationType = wakeUpOperation
+	if wakeUpSchedule != "" {
+		// Comportamiento original: usar wakeUpSchedule si está disponible
+		if lastOperation == sleepOperation {
+			sleepInfoData.CurrentOperationSchedule = wakeUpSchedule
+			sleepInfoData.NextOperationSchedule = sleepSchedule
+			sleepInfoData.CurrentOperationType = wakeUpOperation
+		}
+	} else if pairRole == "wake" {
+		// EXTENSIÓN: Si usamos pair-role=wake y no hay wakeUpSchedule, preservar WAKE
+		// incluso si el Secret tiene lastOperation=SLEEP (porque el Secret puede estar desactualizado)
+		// El sleepAt en este caso es la hora de WAKE, no de SLEEP
+		if sleepInfoData.CurrentOperationType != wakeUpOperation {
+			sleepInfoData.CurrentOperationType = wakeUpOperation
+		}
 	}
+	// NOTA: La lógica de pair-role se aplica tanto antes como después de leer el Secret
+	// para garantizar que funcione correctamente incluso con Secrets desactualizados
 
 	return sleepInfoData, nil
 }
