@@ -116,6 +116,186 @@ spec:
   weekdays: "*"
 ```
 
+### Extended CRD Examples
+
+**Note:** The following examples show how to use the extended functionality for managing CRDs (PgCluster, HDFSCluster, PgBouncer) directly without the helper script.
+
+**Example 1: Suspend PostgreSQL cluster using native CRD support**
+
+This example suspends a PgCluster CRD by setting the shutdown annotation. The postgres-operator will handle the actual shutdown:
+
+```yaml
+apiVersion: kube-green.com/v1alpha1
+kind: SleepInfo
+metadata:
+  name: postgres-schedule
+  namespace: my-namespace
+spec:
+  weekdays: "1-5"
+  sleepAt: "20:00"
+  wakeUpAt: "08:00"
+  timeZone: "America/Bogota"
+  suspendStatefulSetsPostgres: true
+  excludeRef:
+    - matchLabels:
+        app.kubernetes.io/managed-by: postgres-operator
+        postgres.stratio.com/cluster: "true"
+```
+
+**Example 2: Suspend HDFS cluster using native CRD support**
+
+This example suspends an HDFSCluster CRD by setting the shutdown annotation:
+
+```yaml
+apiVersion: kube-green.com/v1alpha1
+kind: SleepInfo
+metadata:
+  name: hdfs-schedule
+  namespace: my-namespace
+spec:
+  weekdays: "1-5"
+  sleepAt: "20:00"
+  wakeUpAt: "08:00"
+  timeZone: "America/Bogota"
+  suspendStatefulSetsHdfs: true
+  excludeRef:
+    - matchLabels:
+        app.kubernetes.io/managed-by: hdfs-operator
+        hdfs.stratio.com/cluster: "true"
+```
+
+**Example 3: Suspend PgBouncer instances using native CRD support**
+
+This example suspends PgBouncer CRDs by modifying the `spec.instances` field:
+
+```yaml
+apiVersion: kube-green.com/v1alpha1
+kind: SleepInfo
+metadata:
+  name: pgbouncer-schedule
+  namespace: my-namespace
+spec:
+  weekdays: "1-5"
+  sleepAt: "20:00"
+  wakeUpAt: "08:00"
+  timeZone: "America/Bogota"
+  suspendDeploymentsPgbouncer: true
+```
+
+**Example 4: Staged wake-up for datastores namespace (Postgres, HDFS, PgBouncer, and native deployments)**
+
+This example uses separate SleepInfos with shared annotations to implement staged wake-up. The `pair-id` and `pair-role` annotations allow the wake SleepInfos to find restore patches from the sleep SleepInfo:
+
+**Sleep SleepInfo** (suspends all resources):
+
+```yaml
+apiVersion: kube-green.com/v1alpha1
+kind: SleepInfo
+metadata:
+  name: sleep-datastores
+  namespace: my-datastores
+  annotations:
+    kube-green.stratio.com/pair-id: "my-datastores"
+    kube-green.stratio.com/pair-role: "sleep"
+spec:
+  weekdays: "1-5"
+  sleepAt: "20:00"
+  timeZone: "America/Bogota"
+  suspendDeployments: true
+  suspendStatefulSets: true
+  suspendCronJobs: true
+  suspendDeploymentsPgbouncer: true
+  suspendStatefulSetsPostgres: true
+  suspendStatefulSetsHdfs: true
+  excludeRef:
+    - matchLabels:
+        app.kubernetes.io/managed-by: postgres-operator
+    - matchLabels:
+        postgres.stratio.com/cluster: "true"
+    - matchLabels:
+        app.kubernetes.io/managed-by: hdfs-operator
+    - matchLabels:
+        hdfs.stratio.com/cluster: "true"
+```
+
+**Wake SleepInfo for Postgres and HDFS** (first stage - 5 minutes before others):
+
+```yaml
+apiVersion: kube-green.com/v1alpha1
+kind: SleepInfo
+metadata:
+  name: wake-datastores-pg-hdfs
+  namespace: my-datastores
+  annotations:
+    kube-green.stratio.com/pair-id: "my-datastores"
+    kube-green.stratio.com/pair-role: "wake"
+spec:
+  weekdays: "1-5"
+  sleepAt: "07:55"
+  timeZone: "America/Bogota"
+  suspendStatefulSetsPostgres: true
+  suspendStatefulSetsHdfs: true
+  excludeRef:
+    - matchLabels:
+        app.kubernetes.io/managed-by: postgres-operator
+    - matchLabels:
+        postgres.stratio.com/cluster: "true"
+    - matchLabels:
+        app.kubernetes.io/managed-by: hdfs-operator
+    - matchLabels:
+        hdfs.stratio.com/cluster: "true"
+```
+
+**Wake SleepInfo for PgBouncer** (second stage - 2 minutes after Postgres/HDFS):
+
+```yaml
+apiVersion: kube-green.com/v1alpha1
+kind: SleepInfo
+metadata:
+  name: wake-datastores-pgbouncer
+  namespace: my-datastores
+  annotations:
+    kube-green.stratio.com/pair-id: "my-datastores"
+    kube-green.stratio.com/pair-role: "wake"
+spec:
+  weekdays: "1-5"
+  sleepAt: "07:57"
+  timeZone: "America/Bogota"
+  suspendDeploymentsPgbouncer: true
+```
+
+**Wake SleepInfo for native deployments** (final stage - at wake time):
+
+```yaml
+apiVersion: kube-green.com/v1alpha1
+kind: SleepInfo
+metadata:
+  name: wake-datastores
+  namespace: my-datastores
+  annotations:
+    kube-green.stratio.com/pair-id: "my-datastores"
+    kube-green.stratio.com/pair-role: "wake"
+spec:
+  weekdays: "1-5"
+  sleepAt: "08:00"
+  timeZone: "America/Bogota"
+  suspendDeployments: true
+  suspendStatefulSets: true
+  suspendCronJobs: true
+  suspendDeploymentsPgbouncer: true
+  excludeRef:
+    - matchLabels:
+        app.kubernetes.io/managed-by: postgres-operator
+    - matchLabels:
+        postgres.stratio.com/cluster: "true"
+    - matchLabels:
+        app.kubernetes.io/managed-by: hdfs-operator
+    - matchLabels:
+        hdfs.stratio.com/cluster: "true"
+```
+
+**Note:** The staged wake-up ensures services start in the correct order: Postgres/HDFS first (needed by all), then PgBouncer (depends on Postgres), and finally native deployments (depend on databases).
+
 To see other examples, go to [our docs](https://kube-green.dev/docs/configuration/#examples).
 
 ## Extensions
