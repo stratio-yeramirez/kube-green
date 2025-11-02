@@ -114,12 +114,14 @@ func (s *Server) handleListSchedules(c *gin.Context) {
 
 // handleGetSchedule gets schedule for a specific tenant
 // @Summary Get schedule for tenant
-// @Description Returns all SleepInfo configurations for a specific tenant, grouped by namespace
+// @Description Returns all SleepInfo configurations for a specific tenant, grouped by namespace. If namespace parameter is not provided, returns all namespaces. If namespace is provided (datastores, apps, rocket, intelligence, airflowsso), returns only that namespace.
 // @Tags Schedules
 // @Accept json
 // @Produce json
 // @Param tenant path string true "Tenant name" example:"bdadevdat"
-// @Success 200 {object} APIResponse{data=ScheduleResponse} "Schedule information"
+// @Param namespace query string false "Namespace suffix filter (datastores, apps, rocket, intelligence, airflowsso). Leave empty to get all namespaces" example:"datastores"
+// @Success 200 {object} APIResponse{data=ScheduleResponse} "Schedule information with improved structure"
+// @Failure 400 {object} ErrorResponse "Invalid request parameters"
 // @Failure 404 {object} ErrorResponse "Schedule not found"
 // @Failure 500 {object} ErrorResponse "Internal server error"
 // @Router /api/v1/schedules/{tenant} [get]
@@ -134,7 +136,29 @@ func (s *Server) handleGetSchedule(c *gin.Context) {
 		return
 	}
 
-	schedule, err := s.scheduleService.GetSchedule(c.Request.Context(), tenant)
+	// Get optional namespace filter from query parameter
+	namespaceFilter := c.Query("namespace")
+
+	// Validate namespace if provided
+	if namespaceFilter != "" {
+		valid := false
+		for _, validNS := range validSuffixes {
+			if namespaceFilter == validNS {
+				valid = true
+				break
+			}
+		}
+		if !valid {
+			c.JSON(http.StatusBadRequest, ErrorResponse{
+				Success: false,
+				Error:   fmt.Sprintf("invalid namespace '%s'. Valid options are: %s", namespaceFilter, ValidNamespaceSuffixes),
+				Code:    http.StatusBadRequest,
+			})
+			return
+		}
+	}
+
+	schedule, err := s.scheduleService.GetSchedule(c.Request.Context(), tenant, namespaceFilter)
 	if err != nil {
 		if strings.Contains(err.Error(), "no schedules found") {
 			c.JSON(http.StatusNotFound, ErrorResponse{
@@ -144,7 +168,7 @@ func (s *Server) handleGetSchedule(c *gin.Context) {
 			})
 			return
 		}
-		s.logger.Error(err, "failed to get schedule", "tenant", tenant)
+		s.logger.Error(err, "failed to get schedule", "tenant", tenant, "namespace", namespaceFilter)
 		handleKubernetesError(c, err)
 		return
 	}

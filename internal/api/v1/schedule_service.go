@@ -479,18 +479,38 @@ func (s *ScheduleService) createOrUpdateSleepInfo(ctx context.Context, sleepInfo
 
 // ScheduleResponse represents a schedule for a tenant
 type ScheduleResponse struct {
-	Tenant     string                        `json:"tenant"`
-	Namespaces map[string][]SleepInfoSummary `json:"namespaces"`
+	Tenant     string                   `json:"tenant"`
+	Namespaces map[string]NamespaceInfo `json:"namespaces"`
+}
+
+// NamespaceInfo represents schedule information for a namespace
+type NamespaceInfo struct {
+	Namespace string             `json:"namespace"`
+	Weekdays  string             `json:"weekdays"`
+	Timezone  string             `json:"timezone"`
+	Schedule  []SleepInfoSummary `json:"schedule"` // Chronologically ordered schedule
+	Summary   ScheduleSummary    `json:"summary"`  // Human-readable summary
+}
+
+// ScheduleSummary provides a human-readable summary of the schedule
+type ScheduleSummary struct {
+	SleepTime   string   `json:"sleepTime,omitempty"` // When resources go to sleep
+	WakeTime    string   `json:"wakeTime,omitempty"`  // When resources wake up
+	Operations  []string `json:"operations"`          // List of operations in order
+	Description string   `json:"description"`         // Human-readable description
 }
 
 // SleepInfoSummary represents a summary of a SleepInfo
 type SleepInfoSummary struct {
 	Name        string            `json:"name"`
 	Namespace   string            `json:"namespace"`
+	Role        string            `json:"role"`      // "sleep" or "wake"
+	Operation   string            `json:"operation"` // Human-readable description
+	Time        string            `json:"time"`      // Sleep or wake time
 	Weekdays    string            `json:"weekdays"`
-	SleepTime   string            `json:"sleepTime"`
-	WakeTime    string            `json:"wakeTime,omitempty"`
 	TimeZone    string            `json:"timeZone"`
+	Resources   []string          `json:"resources"` // List of resources managed (Postgres, HDFS, PgBouncer, Deployments, etc.)
+	WakeTime    string            `json:"wakeTime,omitempty"`
 	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
@@ -503,7 +523,7 @@ func (s *ScheduleService) ListSchedules(ctx context.Context) ([]ScheduleResponse
 	}
 
 	// Group by tenant (extract from namespace: tenant-suffix)
-	tenantMap := make(map[string]map[string][]SleepInfoSummary)
+	tenantMap := make(map[string]map[string][]kubegreenv1alpha1.SleepInfo)
 
 	for _, si := range sleepInfoList.Items {
 		// Extract tenant from namespace (e.g., "bdadevdat-datastores" -> "bdadevdat")
@@ -518,25 +538,19 @@ func (s *ScheduleService) ListSchedules(ctx context.Context) ([]ScheduleResponse
 		suffix := nsParts[len(nsParts)-1]
 
 		if tenantMap[tenant] == nil {
-			tenantMap[tenant] = make(map[string][]SleepInfoSummary)
+			tenantMap[tenant] = make(map[string][]kubegreenv1alpha1.SleepInfo)
 		}
 
-		summary := SleepInfoSummary{
-			Name:        si.Name,
-			Namespace:   si.Namespace,
-			Weekdays:    si.Spec.Weekdays,
-			SleepTime:   si.Spec.SleepTime,
-			WakeTime:    si.Spec.WakeUpTime,
-			TimeZone:    si.Spec.TimeZone,
-			Annotations: si.Annotations,
-		}
-
-		tenantMap[tenant][suffix] = append(tenantMap[tenant][suffix], summary)
+		tenantMap[tenant][suffix] = append(tenantMap[tenant][suffix], si)
 	}
 
 	// Convert to response format
 	result := make([]ScheduleResponse, 0, len(tenantMap))
-	for tenant, namespaces := range tenantMap {
+	for tenant, namespaceGroups := range tenantMap {
+		namespaces := make(map[string]NamespaceInfo)
+		for suffix, sleepInfos := range namespaceGroups {
+			namespaces[suffix] = buildNamespaceInfo(sleepInfos)
+		}
 		result = append(result, ScheduleResponse{
 			Tenant:     tenant,
 			Namespaces: namespaces,
@@ -547,16 +561,21 @@ func (s *ScheduleService) ListSchedules(ctx context.Context) ([]ScheduleResponse
 }
 
 // GetSchedule gets all SleepInfos for a specific tenant
-func (s *ScheduleService) GetSchedule(ctx context.Context, tenant string) (*ScheduleResponse, error) {
+func (s *ScheduleService) GetSchedule(ctx context.Context, tenant string, namespaceSuffix ...string) (*ScheduleResponse, error) {
 	// List all SleepInfos
 	sleepInfoList := &kubegreenv1alpha1.SleepInfoList{}
 	if err := s.client.List(ctx, sleepInfoList); err != nil {
 		return nil, fmt.Errorf("failed to list SleepInfos: %w", err)
 	}
 
-	namespaces := make(map[string][]SleepInfoSummary)
+	namespaces := make(map[string]NamespaceInfo)
+	var filterNamespace string
+	if len(namespaceSuffix) > 0 && namespaceSuffix[0] != "" {
+		filterNamespace = namespaceSuffix[0]
+	}
 
-	// Filter by tenant
+	// Filter by tenant and group by namespace suffix
+	namespaceGroups := make(map[string][]kubegreenv1alpha1.SleepInfo)
 	for _, si := range sleepInfoList.Items {
 		// Extract tenant from namespace
 		nsParts := strings.Split(si.Namespace, "-")
@@ -571,27 +590,221 @@ func (s *ScheduleService) GetSchedule(ctx context.Context, tenant string) (*Sche
 
 		suffix := nsParts[len(nsParts)-1]
 
-		summary := SleepInfoSummary{
-			Name:        si.Name,
-			Namespace:   si.Namespace,
-			Weekdays:    si.Spec.Weekdays,
-			SleepTime:   si.Spec.SleepTime,
-			WakeTime:    si.Spec.WakeUpTime,
-			TimeZone:    si.Spec.TimeZone,
-			Annotations: si.Annotations,
+		// Filter by namespace suffix if provided
+		if filterNamespace != "" && suffix != filterNamespace {
+			continue
 		}
 
-		namespaces[suffix] = append(namespaces[suffix], summary)
+		namespaceGroups[suffix] = append(namespaceGroups[suffix], si)
 	}
 
-	if len(namespaces) == 0 {
+	if len(namespaceGroups) == 0 {
+		if filterNamespace != "" {
+			return nil, fmt.Errorf("no schedules found for tenant: %s in namespace: %s", tenant, filterNamespace)
+		}
 		return nil, fmt.Errorf("no schedules found for tenant: %s", tenant)
+	}
+
+	// Process each namespace group
+	for suffix, sleepInfos := range namespaceGroups {
+		namespaceInfo := buildNamespaceInfo(sleepInfos)
+		namespaces[suffix] = namespaceInfo
 	}
 
 	return &ScheduleResponse{
 		Tenant:     tenant,
 		Namespaces: namespaces,
 	}, nil
+}
+
+// buildNamespaceInfo creates a NamespaceInfo from a list of SleepInfos
+func buildNamespaceInfo(sleepInfos []kubegreenv1alpha1.SleepInfo) NamespaceInfo {
+	if len(sleepInfos) == 0 {
+		return NamespaceInfo{}
+	}
+
+	// Get common info from first SleepInfo
+	first := sleepInfos[0]
+	nsInfo := NamespaceInfo{
+		Namespace: first.Namespace,
+		Weekdays:  first.Spec.Weekdays,
+		Timezone:  first.Spec.TimeZone,
+	}
+
+	// Convert weekdays to human-readable (keep numeric for now, can enhance later)
+	// For now, just use the numeric format
+
+	// Build summaries for each SleepInfo
+	summaries := make([]SleepInfoSummary, 0, len(sleepInfos))
+	var sleepTime, wakeTime string
+	var operations []string
+
+	for _, si := range sleepInfos {
+		summary := buildSleepInfoSummary(si)
+		summaries = append(summaries, summary)
+
+		// Track times for summary
+		if summary.Role == "sleep" && sleepTime == "" {
+			sleepTime = summary.Time
+		}
+		if summary.Role == "wake" {
+			if wakeTime == "" || summary.Time > wakeTime {
+				wakeTime = summary.Time
+			}
+			operations = append(operations, fmt.Sprintf("%s a las %s (%s)", summary.Operation, summary.Time, strings.Join(summary.Resources, ", ")))
+		} else if summary.Role == "sleep" {
+			operations = append(operations, fmt.Sprintf("%s a las %s", summary.Operation, summary.Time))
+		}
+	}
+
+	// Sort summaries by time
+	sortSummariesByTime(summaries)
+	nsInfo.Schedule = summaries
+
+	// Build human-readable summary
+	nsInfo.Summary = ScheduleSummary{
+		SleepTime:   sleepTime,
+		WakeTime:    wakeTime,
+		Operations:  operations,
+		Description: buildScheduleDescription(summaries),
+	}
+
+	return nsInfo
+}
+
+// buildSleepInfoSummary creates a SleepInfoSummary from a SleepInfo
+func buildSleepInfoSummary(si kubegreenv1alpha1.SleepInfo) SleepInfoSummary {
+	// Determine role from annotations or name
+	role := "wake"
+	operation := "Encender servicios"
+	if pairRole, ok := si.Annotations["kube-green.stratio.com/pair-role"]; ok {
+		role = pairRole
+	} else if strings.HasPrefix(si.Name, "sleep-") {
+		role = "sleep"
+		operation = "Apagar servicios"
+	}
+
+	// Determine time
+	time := si.Spec.SleepTime
+	if time == "" {
+		time = si.Spec.WakeUpTime
+	}
+
+	// Determine resources managed
+	resources := determineManagedResources(si, role)
+
+	// Build operation description
+	operation = buildOperationDescription(role, resources)
+
+	summary := SleepInfoSummary{
+		Name:        si.Name,
+		Namespace:   si.Namespace,
+		Role:        role,
+		Operation:   operation,
+		Time:        time,
+		Weekdays:    si.Spec.Weekdays,
+		TimeZone:    si.Spec.TimeZone,
+		WakeTime:    si.Spec.WakeUpTime,
+		Resources:   resources,
+		Annotations: si.Annotations,
+	}
+
+	return summary
+}
+
+// determineManagedResources determines which resources are managed by a SleepInfo
+func determineManagedResources(si kubegreenv1alpha1.SleepInfo, role string) []string {
+	var resources []string
+
+	// Check CRD-specific flags
+	if si.Spec.SuspendStatefulSetsPostgres != nil && *si.Spec.SuspendStatefulSetsPostgres {
+		resources = append(resources, "Postgres")
+	}
+	if si.Spec.SuspendStatefulSetsHdfs != nil && *si.Spec.SuspendStatefulSetsHdfs {
+		resources = append(resources, "HDFS")
+	}
+	if si.Spec.SuspendDeploymentsPgbouncer != nil && *si.Spec.SuspendDeploymentsPgbouncer {
+		resources = append(resources, "PgBouncer")
+	}
+
+	// Check native resource flags
+	if si.Spec.SuspendDeployments != nil && *si.Spec.SuspendDeployments {
+		resources = append(resources, "Deployments")
+	}
+	if si.Spec.SuspendStatefulSets != nil && *si.Spec.SuspendStatefulSets {
+		resources = append(resources, "StatefulSets")
+	}
+	if si.Spec.SuspendCronjobs {
+		resources = append(resources, "CronJobs")
+	}
+
+	// If no specific resources, check role
+	if len(resources) == 0 {
+		if role == "sleep" {
+			resources = []string{"Todos los servicios"}
+		} else {
+			resources = []string{"Todos los servicios"}
+		}
+	}
+
+	return resources
+}
+
+// buildOperationDescription creates a human-readable operation description
+func buildOperationDescription(role string, resources []string) string {
+	action := "Encender"
+	if role == "sleep" {
+		action = "Apagar"
+	}
+
+	if len(resources) == 0 {
+		return fmt.Sprintf("%s servicios", action)
+	}
+
+	if len(resources) == 1 {
+		return fmt.Sprintf("%s %s", action, resources[0])
+	}
+
+	// Join all except last with comma, last with "y"
+	if len(resources) == 2 {
+		return fmt.Sprintf("%s %s y %s", action, resources[0], resources[1])
+	}
+
+	allButLast := strings.Join(resources[:len(resources)-1], ", ")
+	return fmt.Sprintf("%s %s y %s", action, allButLast, resources[len(resources)-1])
+}
+
+// buildScheduleDescription creates a human-readable description of the schedule
+func buildScheduleDescription(summaries []SleepInfoSummary) string {
+	if len(summaries) == 0 {
+		return "Sin programación configurada"
+	}
+
+	var parts []string
+	for _, s := range summaries {
+		parts = append(parts, fmt.Sprintf("%s a las %s", s.Operation, s.Time))
+	}
+	return strings.Join(parts, " → ")
+}
+
+// sortSummariesByTime sorts summaries chronologically (sleep first, then wake by time)
+func sortSummariesByTime(summaries []SleepInfoSummary) {
+	// Simple bubble sort for small lists
+	for i := 0; i < len(summaries); i++ {
+		for j := i + 1; j < len(summaries); j++ {
+			// Sleep always comes before wake at same time
+			if summaries[i].Role == "wake" && summaries[j].Role == "sleep" {
+				if summaries[i].Time == summaries[j].Time {
+					summaries[i], summaries[j] = summaries[j], summaries[i]
+					continue
+				}
+			}
+			// Sort by time
+			if summaries[i].Time > summaries[j].Time {
+				summaries[i], summaries[j] = summaries[j], summaries[i]
+			}
+		}
+	}
 }
 
 // UpdateSchedule updates schedules for a tenant
@@ -602,21 +815,21 @@ func (s *ScheduleService) UpdateSchedule(ctx context.Context, tenant string, req
 		existing, err := s.GetSchedule(ctx, tenant)
 		if err == nil && existing != nil {
 			// Extract values from existing schedule
-			// Note: This is a simplified extraction - we take the first SleepInfo we find
-			for _, sleepInfos := range existing.Namespaces {
-				if len(sleepInfos) > 0 {
-					si := sleepInfos[0]
+			// Note: This is a simplified extraction - we take the first namespace schedule we find
+			for _, nsInfo := range existing.Namespaces {
+				if len(nsInfo.Schedule) > 0 {
+					first := nsInfo.Schedule[0]
 					if req.Weekdays == "" {
-						req.Weekdays = si.Weekdays
+						req.Weekdays = first.Weekdays
 					}
 					if req.Off == "" {
 						// Convert UTC back to local time for display (simplified - we'd need reverse conversion)
 						// For now, we'll require off and on to be provided
-						req.Off = si.SleepTime
+						req.Off = first.Time
 					}
 					if req.On == "" {
-						if si.WakeTime != "" {
-							req.On = si.WakeTime
+						if first.WakeTime != "" {
+							req.On = first.WakeTime
 						}
 					}
 					break
