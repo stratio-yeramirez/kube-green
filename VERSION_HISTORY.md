@@ -4,6 +4,52 @@ Este documento mantiene el registro de versiones y cambios de este fork personal
 
 ---
 
+## [0.7.6] - 2025-11-01
+
+### ✨ Nuevas Funcionalidades
+
+- **Filtro por namespace en todos los endpoints REST API**:
+  - **GET** `/api/v1/schedules/{tenant}`: Parámetro opcional `namespace` para filtrar por namespace específico
+  - **PUT** `/api/v1/schedules/{tenant}`: Parámetro opcional `namespace` para actualizar solo un namespace específico
+  - **DELETE** `/api/v1/schedules/{tenant}`: Parámetro opcional `namespace` para eliminar solo un namespace específico
+  - Si `namespace` está vacío o no se proporciona: opera sobre todos los namespaces del tenant
+  - Si `namespace` se proporciona (datastores, apps, rocket, intelligence, airflowsso): opera solo sobre ese namespace
+  - Archivos modificados: `internal/api/v1/handlers.go`, `internal/api/v1/schedule_service.go`
+
+- **Estructura de respuesta mejorada para GET schedules**:
+  - Nueva estructura `NamespaceInfo` con campos `schedule` (cronológicamente ordenado) y `summary` (resumen legible)
+  - Cada entrada del schedule incluye: `role` (sleep/wake), `operation` (descripción legible), `time`, `resources` (lista de recursos gestionados)
+  - Resumen ejecutivo con `sleepTime`, `wakeTime`, `operations` (lista de operaciones), `description` (descripción completa)
+  - Archivos modificados: `internal/api/v1/schedule_service.go`
+
+### 🔧 Mejoras
+
+- **Swagger UI mejorado**:
+  - Campos `tenant` y `namespace` ahora son campos de texto libre (sin dropdowns/Enums)
+  - Permite escribir cualquier tenant o namespace sin restricciones
+  - Descripciones mejoradas que explican el comportamiento con/sin namespace
+  - Archivos modificados: `internal/api/v1/handlers.go`, `internal/api/v1/doc.go`
+
+- **Validación de namespace**:
+  - Validación en backend para namespaces válidos cuando se proporciona el parámetro
+  - Mensajes de error claros indicando valores válidos
+  - Archivos: `internal/api/v1/handlers.go`, `internal/api/v1/schedule_service.go`
+
+### ✅ Resultado
+
+- API REST más flexible: permite operar sobre todo el tenant o namespace específico
+- Respuestas más legibles con estructura mejorada y resúmenes ejecutivos
+- Swagger UI más intuitivo con campos de texto libre
+- Soporte completo para operaciones por tenant y por tenant+namespace en GET, PUT, DELETE
+
+### 📦 Imagen Docker
+
+- **Repositorio**: `yeramirez/kube-green:0.7.6-rest-api`
+- **Digest**: `sha256:ce930b42ff4b79579ea812da0baeca4d7c1e1417c2314539b5e8f56ddb781e5a`
+- **Fecha de publicación**: 2025-11-01
+
+---
+
 ## [0.7.5] - 2025-11-01
 
 ### 🐛 Correcciones Críticas
