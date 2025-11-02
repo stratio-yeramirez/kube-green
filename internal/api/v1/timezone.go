@@ -49,20 +49,32 @@ func ToUTCHHMM(localHHMM, tzLocal string) (TimeConversion, error) {
 	utcTZ := time.UTC
 
 	// Create datetime in local timezone
+	// Use a fixed date to ensure consistent day shift calculation
 	today := time.Now().In(localTZ)
 	localTime := time.Date(today.Year(), today.Month(), today.Day(), hour, minute, 0, 0, localTZ)
 
 	// Convert to UTC
 	utcTime := localTime.In(utcTZ)
 
-	// Calculate day shift
-	localYear, localMonth, localDay := localTime.Date()
-	utcYear, utcMonth, utcDay := utcTime.Date()
+	// Calculate day shift by comparing the day of year
+	// This is the most reliable method as it directly compares calendar days
+	localYearDay := localTime.YearDay()
+	utcYearDay := utcTime.YearDay()
+	localYear := localTime.Year()
+	utcYear := utcTime.Year()
 
-	localDate := time.Date(localYear, localMonth, localDay, 0, 0, 0, 0, localTZ)
-	utcDate := time.Date(utcYear, utcMonth, utcDay, 0, 0, 0, 0, utcTZ)
-
-	dayShift := int(utcDate.Sub(localDate).Hours() / 24)
+	var dayShift int
+	if localYear == utcYear {
+		// Same year: direct difference of year days
+		dayShift = utcYearDay - localYearDay
+	} else {
+		// Different years (e.g., near year boundary)
+		// Calculate days from epoch for both times and get difference
+		// Unix timestamp divided by seconds per day gives days since epoch
+		localDaysSinceEpoch := localTime.Unix() / 86400
+		utcDaysSinceEpoch := utcTime.Unix() / 86400
+		dayShift = int(utcDaysSinceEpoch - localDaysSinceEpoch)
+	}
 
 	// Format UTC time
 	utcHHMM := fmt.Sprintf("%02d:%02d", utcTime.Hour(), utcTime.Minute())

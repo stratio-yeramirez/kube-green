@@ -4,6 +4,34 @@ Este documento mantiene el registro de versiones y cambios de este fork personal
 
 ---
 
+## [0.7.8] - 2025-01-19
+
+### 🐛 Correcciones Críticas
+
+- **Corrección del cálculo de DayShift en conversión de timezone**:
+  - **Problema**: Cuando una hora local (ej: sábado 20:58 Colombia) cruzaba el límite de día en UTC (domingo 01:58 UTC), el campo `weekdays` no se ajustaba correctamente, manteniendo el día original (sábado "6") en lugar del día UTC (domingo "0")
+  - **Causa**: El cálculo del `DayShift` usando `utcDate.Sub(localDate).Hours() / 24` no era confiable cuando las fechas estaban en diferentes zonas horarias
+  - **Solución**: Reimplementación del cálculo de `DayShift` usando `YearDay()` para comparar directamente los días calendario:
+    - Cuando local y UTC están en el mismo año: diferencia directa de `YearDay()`
+    - Cuando están en años diferentes (cerca de año nuevo): cálculo usando timestamps Unix
+  - **Resultado**: El `DayShift` ahora se calcula correctamente para cualquier día de la semana y cualquier hora que cruce el límite de día
+  - Archivo modificado: `internal/api/v1/timezone.go`
+
+### ✅ Resultado
+
+- **La conversión de timezone ahora funciona correctamente para todos los días de la semana**
+- Horas que cruzan el límite de día (ej: 19:00-23:59 Colombia) ahora ajustan correctamente el `weekdays` en UTC
+- Horas que no cruzan el límite (ej: 00:00-18:59 Colombia) mantienen el mismo día, como se espera
+- La función `ShiftWeekdaysStr` ya funcionaba correctamente; el problema estaba en el cálculo inicial del `DayShift`
+
+### 📦 Imagen Docker
+
+- **Repositorio**: `yeramirez/kube-green:0.7.8-rest-api`
+- **Digest**: `sha256:ce930b42ff4b79579ea812da0baeca4d7c1e1417c2314539b5e8f56ddb781e5a`
+- **Fecha de publicación**: 2025-01-19
+
+---
+
 ## [0.7.6] - 2025-11-01
 
 ### ✨ Nuevas Funcionalidades
