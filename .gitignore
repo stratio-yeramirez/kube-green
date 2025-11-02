@@ -38,3 +38,6 @@ kube-green-local-run.yaml
 tests-logs/
 template.output.yaml
 .helm.template-output.yaml
+
+# Swagger generated docs
+internal/api/v1/docs/

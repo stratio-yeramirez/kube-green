@@ -5,12 +5,14 @@ Copyright 2021.
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"flag"
 	"os"
 	"path/filepath"
 
 	kubegreencomv1alpha1 "github.com/kube-green/kube-green/api/v1alpha1"
+	apiv1 "github.com/kube-green/kube-green/internal/api/v1"
 	sleepinfocontroller "github.com/kube-green/kube-green/internal/controller/sleepinfo"
 	"github.com/kube-green/kube-green/internal/controller/sleepinfo/metrics"
 	webhookv1alpha1 "github.com/kube-green/kube-green/internal/webhook/v1alpha1"
@@ -62,6 +64,9 @@ func main() {
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var maxConcurrentReconciles int
+	var apiPort int
+	var enableAPI bool
+	var enableAPICORS bool
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&webhookHost, "webhook-host", "", "The host where the server binds to. Default means all interfaces.")
 	flag.IntVar(&webhookPort, "webhook-server-port", 9443, "The port where the server will listen.")
@@ -86,6 +91,9 @@ func main() {
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	flag.IntVar(&maxConcurrentReconciles, "max-concurrent-reconciles", 20,
 		"Max concurrent schedules that will be processed at the same time.")
+	flag.IntVar(&apiPort, "api-port", 8080, "The port where the REST API server will listen.")
+	flag.BoolVar(&enableAPI, "enable-api", false, "Enable the REST API server.")
+	flag.BoolVar(&enableAPICORS, "enable-api-cors", false, "Enable CORS for the REST API server.")
 
 	opts := zap.Options{}
 	opts.BindFlags(flag.CommandLine)
@@ -239,9 +247,40 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Start REST API server if enabled
+	ctx := ctrl.SetupSignalHandler()
+	if enableAPI {
+		apiServer := apiv1.NewServer(apiv1.Config{
+			Port:       apiPort,
+			Client:     mgr.GetClient(),
+			Logger:     ctrl.Log.WithName("api"),
+			EnableCORS: enableAPICORS,
+		})
+
+		// Add API server as a runnable to the manager
+		if err := mgr.Add(&runnableServer{
+			server: apiServer,
+			ctx:    ctx,
+		}); err != nil {
+			setupLog.Error(err, "unable to add REST API server to manager")
+			os.Exit(1)
+		}
+		setupLog.Info("REST API server enabled", "port", apiPort)
+	}
+
 	setupLog.Info("starting manager")
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+	if err := mgr.Start(ctx); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+// runnableServer is a wrapper to make the API server compatible with controller-runtime's Manager
+type runnableServer struct {
+	server *apiv1.Server
+	ctx    context.Context
+}
+
+func (r *runnableServer) Start(ctx context.Context) error {
+	return r.server.Start(ctx)
 }
