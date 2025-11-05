@@ -1078,8 +1078,13 @@ func (s *ScheduleService) ListTenants(ctx context.Context) (*TenantListResponse,
 			tenantMap[tenant] = make(map[string]bool)
 		}
 
-		// Add namespace suffix (prefix) dinámicamente
+	// Add namespace suffix (prefix) dinámicamente
 		tenantMap[tenant][suffix] = true
+		
+		// Debug: log bdadev namespaces as they're found
+		if tenant == "bdadev" {
+			s.logger.Info("ListTenants", "found_bdadev_namespace", suffix, "full_namespace", nsName)
+		}
 	}
 
 	s.logger.Info("ListTenants", "total_tenants_found", len(tenantMap))
