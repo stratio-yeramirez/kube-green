@@ -7,6 +7,7 @@ package v1
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	kubegreenv1alpha1 "github.com/kube-green/kube-green/api/v1alpha1"
@@ -1099,12 +1100,18 @@ func (s *ScheduleService) ListTenants(ctx context.Context) (*TenantListResponse,
 		for ns := range namespaces {
 			nsList = append(nsList, ns)
 		}
+		// Sort namespaces for consistent ordering
+		sort.Strings(nsList)
 
 		tenants = append(tenants, TenantInfo{
 			Name:       tenant,
 			Namespaces: nsList,
 		})
 	}
+	// Sort tenants by name for consistent ordering
+	sort.Slice(tenants, func(i, j int) bool {
+		return tenants[i].Name < tenants[j].Name
+	})
 
 	return &TenantListResponse{
 		Tenants: tenants,
