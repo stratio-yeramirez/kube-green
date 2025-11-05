@@ -12,6 +12,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 	github.com/swaggo/files v1.0.1
 	github.com/swaggo/gin-swagger v1.6.1
+	github.com/swaggo/swag v1.16.6
 	github.com/vladimirvivien/gexe v0.5.0
 	k8s.io/api v0.34.1
 	k8s.io/apimachinery v0.34.1
@@ -110,7 +111,6 @@ require (
 	github.com/spf13/cobra v1.9.1 // indirect
 	github.com/spf13/pflag v1.0.7 // indirect
 	github.com/stoewer/go-strcase v1.3.0 // indirect
-	github.com/swaggo/swag v1.16.6 // indirect
 	github.com/thoas/go-funk v0.9.3 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.3.1 // indirect
