@@ -1064,7 +1064,7 @@ func (s *ScheduleService) ListTenants(ctx context.Context) (*TenantListResponse,
 		return nil, fmt.Errorf("failed to list namespaces: %w", err)
 	}
 
-	// Map to track tenants and their namespaces
+	// Map to track tenants and their namespaces (dinámico - sin filtrar por validSuffixes)
 	tenantMap := make(map[string]map[string]bool)
 
 	for _, ns := range namespaceList.Items {
@@ -1080,25 +1080,15 @@ func (s *ScheduleService) ListTenants(ctx context.Context) (*TenantListResponse,
 		tenant := strings.Join(nsParts[:len(nsParts)-1], "-")
 		suffix := nsParts[len(nsParts)-1]
 
-		// Validate suffix is one of the known suffixes
-		isValidSuffix := false
-		for _, valid := range validSuffixes {
-			if suffix == valid {
-				isValidSuffix = true
-				break
-			}
-		}
-
-		if !isValidSuffix {
-			continue // Skip namespaces with unknown suffixes
-		}
+		// NO FILTRAR por validSuffixes - aceptar TODOS los namespaces que coincidan con el patrón
+		// Esto permite descubrimiento dinámico de cualquier namespace que siga el patrón {tenant}-{prefix}
 
 		// Initialize tenant map if needed
 		if tenantMap[tenant] == nil {
 			tenantMap[tenant] = make(map[string]bool)
 		}
 
-		// Add namespace suffix
+		// Add namespace suffix (prefix) dinámicamente
 		tenantMap[tenant][suffix] = true
 	}
 
