@@ -235,7 +235,7 @@ func parseDelayToMinutes(delayStr string) (int, error) {
 // NO filtra por validSuffixes - acepta cualquier namespace dinámicamente
 func normalizeNamespaces(nsInput []string) map[string]bool {
 	result := make(map[string]bool)
-	
+
 	// Si no hay input, retornar mapa vacío (no todos los namespaces por defecto)
 	// El llamado debe especificar explícitamente los namespaces deseados
 	if len(nsInput) == 0 {
@@ -1052,8 +1052,40 @@ func (s *ScheduleService) ListTenants(ctx context.Context) (*TenantListResponse,
 		return nil, fmt.Errorf("failed to list namespaces: %w", err)
 	}
 
+	s.logger.Info("ListTenants", "total_namespaces_found", len(namespaceList.Items))
+
 	// Map to track tenants and their namespaces (dinámico - sin filtrar por validSuffixes)
 	tenantMap := make(map[string]map[string]bool)
+
+	for _, ns := range namespaceList.Items {
+		nsName := ns.Name
+
+		// Check if namespace matches tenant-suffix pattern
+		nsParts := strings.Split(nsName, "-")
+		if len(nsParts) < 2 {
+			continue // Skip namespaces that don't match pattern
+		}
+
+		// Extract tenant (all parts except last)
+		tenant := strings.Join(nsParts[:len(nsParts)-1], "-")
+		suffix := nsParts[len(nsParts)-1]
+
+		// NO FILTRAR por validSuffixes - aceptar TODOS los namespaces que coincidan con el patrón
+		// Esto permite descubrimiento dinámico de cualquier namespace que siga el patrón {tenant}-{prefix}
+
+		// Initialize tenant map if needed
+		if tenantMap[tenant] == nil {
+			tenantMap[tenant] = make(map[string]bool)
+		}
+
+		// Add namespace suffix (prefix) dinámicamente
+		tenantMap[tenant][suffix] = true
+	}
+
+	s.logger.Info("ListTenants", "total_tenants_found", len(tenantMap))
+	if bdadevNamespaces, ok := tenantMap["bdadev"]; ok {
+		s.logger.Info("ListTenants", "bdadev_namespaces_count", len(bdadevNamespaces))
+	}
 
 	for _, ns := range namespaceList.Items {
 		nsName := ns.Name
