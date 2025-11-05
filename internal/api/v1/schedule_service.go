@@ -1087,31 +1087,6 @@ func (s *ScheduleService) ListTenants(ctx context.Context) (*TenantListResponse,
 		s.logger.Info("ListTenants", "bdadev_namespaces_count", len(bdadevNamespaces))
 	}
 
-	for _, ns := range namespaceList.Items {
-		nsName := ns.Name
-
-		// Check if namespace matches tenant-suffix pattern
-		nsParts := strings.Split(nsName, "-")
-		if len(nsParts) < 2 {
-			continue // Skip namespaces that don't match pattern
-		}
-
-		// Extract tenant (all parts except last)
-		tenant := strings.Join(nsParts[:len(nsParts)-1], "-")
-		suffix := nsParts[len(nsParts)-1]
-
-		// NO FILTRAR por validSuffixes - aceptar TODOS los namespaces que coincidan con el patrón
-		// Esto permite descubrimiento dinámico de cualquier namespace que siga el patrón {tenant}-{prefix}
-
-		// Initialize tenant map if needed
-		if tenantMap[tenant] == nil {
-			tenantMap[tenant] = make(map[string]bool)
-		}
-
-		// Add namespace suffix (prefix) dinámicamente
-		tenantMap[tenant][suffix] = true
-	}
-
 	// Convert to response format
 	tenants := make([]TenantInfo, 0, len(tenantMap))
 	for tenant, namespaces := range tenantMap {
