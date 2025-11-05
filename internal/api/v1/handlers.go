@@ -557,6 +557,53 @@ func (s *Server) handleGetNamespaceServices(c *gin.Context) {
 	})
 }
 
+// handleGetNamespaceResources detects CRDs and resources in a namespace
+// @Summary Get namespace resources
+// @Description Detects CRDs (PgCluster, HDFSCluster, PgBouncer) and other resources in a namespace
+// @Tags Resources
+// @Accept json
+// @Produce json
+// @Param tenant path string true "Tenant name" example:"bdadevdat"
+// @Param namespace query string true "Namespace suffix (datastores, apps, rocket, intelligence, airflowsso)" example:"datastores"
+// @Success 200 {object} APIResponse{data=NamespaceResourceInfo}
+// @Failure 400 {object} ErrorResponse
+// @Failure 500 {object} ErrorResponse
+// @Router /api/v1/namespaces/{tenant}/resources [get]
+func (s *Server) handleGetNamespaceResources(c *gin.Context) {
+	tenant := c.Param("tenant")
+	namespace := c.Query("namespace")
+
+	if tenant == "" {
+		c.JSON(http.StatusBadRequest, ErrorResponse{
+			Success: false,
+			Error:   "tenant parameter is required",
+			Code:    http.StatusBadRequest,
+		})
+		return
+	}
+
+	if namespace == "" {
+		c.JSON(http.StatusBadRequest, ErrorResponse{
+			Success: false,
+			Error:   "namespace query parameter is required",
+			Code:    http.StatusBadRequest,
+		})
+		return
+	}
+
+	resources, err := s.scheduleService.GetNamespaceResources(c.Request.Context(), tenant, namespace)
+	if err != nil {
+		s.logger.Error(err, "failed to get namespace resources", "tenant", tenant, "namespace", namespace)
+		handleKubernetesError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, APIResponse{
+		Success: true,
+		Data:    resources,
+	})
+}
+
 // handleGetSuspendedServices lists suspended services for a tenant
 // @Summary List suspended services
 // @Description Lists currently suspended services for a tenant

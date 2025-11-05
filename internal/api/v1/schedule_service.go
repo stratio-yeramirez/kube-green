@@ -14,6 +14,8 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -1267,4 +1269,175 @@ func (s *ScheduleService) GetSuspendedServices(ctx context.Context, tenant strin
 		Tenant:    tenant,
 		Suspended: suspended,
 	}, nil
+}
+
+// NamespaceResourceInfo represents detected resources in a namespace
+type NamespaceResourceInfo struct {
+	Namespace    string            `json:"namespace"`
+	HasPgCluster bool              `json:"hasPgCluster"`
+	HasHdfsCluster bool            `json:"hasHdfsCluster"`
+	HasPgBouncer bool               `json:"hasPgBouncer"`
+	HasVirtualizer bool             `json:"hasVirtualizer"`
+	ResourceCounts ResourceCounts  `json:"resourceCounts"`
+	AutoExclusions []ExclusionFilter `json:"autoExclusions"`
+}
+
+// ResourceCounts represents counts of different resource types
+type ResourceCounts struct {
+	Deployments  int `json:"deployments"`
+	StatefulSets int `json:"statefulSets"`
+	CronJobs     int `json:"cronJobs"`
+	PgClusters   int `json:"pgClusters"`
+	HdfsClusters int `json:"hdfsClusters"`
+	PgBouncers   int `json:"pgBouncers"`
+}
+
+// GetNamespaceResources detects CRDs and other resources in a namespace
+func (s *ScheduleService) GetNamespaceResources(ctx context.Context, tenant, namespaceSuffix string) (*NamespaceResourceInfo, error) {
+	namespace := fmt.Sprintf("%s-%s", tenant, namespaceSuffix)
+
+	info := &NamespaceResourceInfo{
+		Namespace:      namespace,
+		HasPgCluster:   false,
+		HasHdfsCluster: false,
+		HasPgBouncer:   false,
+		HasVirtualizer: false,
+		ResourceCounts: ResourceCounts{},
+		AutoExclusions: []ExclusionFilter{},
+	}
+
+	// List Deployments
+	deploymentList := &appsv1.DeploymentList{}
+	if err := s.client.List(ctx, deploymentList, client.InNamespace(namespace)); err == nil {
+		info.ResourceCounts.Deployments = len(deploymentList.Items)
+		
+		// Check for Virtualizer (apps namespace)
+		for _, dep := range deploymentList.Items {
+			if appID, ok := dep.Labels["cct.stratio.com/application_id"]; ok {
+				if strings.Contains(appID, "virtualizer") {
+					info.HasVirtualizer = true
+					break
+				}
+			}
+		}
+	}
+
+	// List StatefulSets
+	statefulSetList := &appsv1.StatefulSetList{}
+	if err := s.client.List(ctx, statefulSetList, client.InNamespace(namespace)); err == nil {
+		info.ResourceCounts.StatefulSets = len(statefulSetList.Items)
+	}
+
+	// List CronJobs
+	cronJobList := &batchv1.CronJobList{}
+	if err := s.client.List(ctx, cronJobList, client.InNamespace(namespace)); err == nil {
+		info.ResourceCounts.CronJobs = len(cronJobList.Items)
+	}
+
+	// Detect PgCluster CRDs
+	pgClusterGVR := schema.GroupVersionResource{
+		Group:    "postgres.stratio.com",
+		Version:  "v1",
+		Resource: "pgclusters",
+	}
+	pgClusterList := &unstructured.UnstructuredList{}
+	pgClusterList.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   pgClusterGVR.Group,
+		Version: pgClusterGVR.Version,
+		Kind:    "PgClusterList",
+	})
+	if err := s.client.List(ctx, pgClusterList, client.InNamespace(namespace)); err == nil {
+		info.ResourceCounts.PgClusters = len(pgClusterList.Items)
+		info.HasPgCluster = len(pgClusterList.Items) > 0
+	} else {
+		// Try alternative API group
+		pgClusterGVR2 := schema.GroupVersionResource{
+			Group:    "postgresql.cnpg.io",
+			Version:  "v1",
+			Resource: "clusters",
+		}
+		pgClusterList2 := &unstructured.UnstructuredList{}
+		pgClusterList2.SetGroupVersionKind(schema.GroupVersionKind{
+			Group:   pgClusterGVR2.Group,
+			Version: pgClusterGVR2.Version,
+			Kind:    "ClusterList",
+		})
+		if err2 := s.client.List(ctx, pgClusterList2, client.InNamespace(namespace)); err2 == nil {
+			info.ResourceCounts.PgClusters = len(pgClusterList2.Items)
+			info.HasPgCluster = len(pgClusterList2.Items) > 0
+		}
+	}
+
+	// Detect HDFSCluster CRDs
+	hdfsClusterGVR := schema.GroupVersionResource{
+		Group:    "hdfs.stratio.com",
+		Version:  "v1",
+		Resource: "hdfsclusters",
+	}
+	hdfsClusterList := &unstructured.UnstructuredList{}
+	hdfsClusterList.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   hdfsClusterGVR.Group,
+		Version: hdfsClusterGVR.Version,
+		Kind:    "HDFSClusterList",
+	})
+	if err := s.client.List(ctx, hdfsClusterList, client.InNamespace(namespace)); err == nil {
+		info.ResourceCounts.HdfsClusters = len(hdfsClusterList.Items)
+		info.HasHdfsCluster = len(hdfsClusterList.Items) > 0
+	}
+
+	// Detect PgBouncer CRDs
+	pgBouncerGVR := schema.GroupVersionResource{
+		Group:    "postgres.stratio.com",
+		Version:  "v1",
+		Resource: "pgbouncers",
+	}
+	pgBouncerList := &unstructured.UnstructuredList{}
+	pgBouncerList.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   pgBouncerGVR.Group,
+		Version: pgBouncerGVR.Version,
+		Kind:    "PgBouncerList",
+	})
+	if err := s.client.List(ctx, pgBouncerList, client.InNamespace(namespace)); err == nil {
+		info.ResourceCounts.PgBouncers = len(pgBouncerList.Items)
+		info.HasPgBouncer = len(pgBouncerList.Items) > 0
+	}
+
+	// Build auto-exclusions based on detected resources
+	if info.HasPgCluster || info.HasPgBouncer {
+		info.AutoExclusions = append(info.AutoExclusions, ExclusionFilter{
+			MatchLabels: map[string]string{
+				"app.kubernetes.io/managed-by": "postgres-operator",
+			},
+		})
+		info.AutoExclusions = append(info.AutoExclusions, ExclusionFilter{
+			MatchLabels: map[string]string{
+				"postgres.stratio.com/cluster": "true",
+			},
+		})
+		info.AutoExclusions = append(info.AutoExclusions, ExclusionFilter{
+			MatchLabels: map[string]string{
+				"app.kubernetes.io/part-of": "postgres",
+			},
+		})
+	}
+
+	if info.HasHdfsCluster {
+		info.AutoExclusions = append(info.AutoExclusions, ExclusionFilter{
+			MatchLabels: map[string]string{
+				"app.kubernetes.io/managed-by": "hdfs-operator",
+			},
+		})
+		info.AutoExclusions = append(info.AutoExclusions, ExclusionFilter{
+			MatchLabels: map[string]string{
+				"hdfs.stratio.com/cluster": "true",
+			},
+		})
+		info.AutoExclusions = append(info.AutoExclusions, ExclusionFilter{
+			MatchLabels: map[string]string{
+				"app.kubernetes.io/part-of": "hdfs",
+			},
+		})
+	}
+
+	return info, nil
 }
