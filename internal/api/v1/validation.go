@@ -12,6 +12,8 @@ import (
 var (
 	// timePattern matches HH:MM format (24-hour)
 	timePattern = regexp.MustCompile(`^([0-1]?[0-9]|2[0-3]):([0-5][0-9])$`)
+	// scheduleNamePattern matches Kubernetes resource name requirements: lowercase alphanumeric and hyphens, max 253 chars
+	scheduleNamePattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`)
 )
 
 // ValidateCreateSchedule validates a CreateScheduleRequest
@@ -34,6 +36,16 @@ func ValidateCreateSchedule(req CreateScheduleRequest) error {
 
 	if !timePattern.MatchString(req.On) {
 		return fmt.Errorf("on time must be in HH:MM format (24-hour), got: %s", req.On)
+	}
+
+	// Validate scheduleName if provided (must be valid Kubernetes resource name)
+	if req.ScheduleName != "" {
+		if len(req.ScheduleName) > 253 {
+			return fmt.Errorf("scheduleName must be 253 characters or less")
+		}
+		if !scheduleNamePattern.MatchString(req.ScheduleName) {
+			return fmt.Errorf("scheduleName must be a valid Kubernetes resource name (lowercase alphanumeric, hyphens, and dots allowed): %s", req.ScheduleName)
+		}
 	}
 
 	// Validate weekdays if provided

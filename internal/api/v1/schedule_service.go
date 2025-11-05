@@ -143,7 +143,17 @@ func (s *ScheduleService) CreateSchedule(ctx context.Context, req CreateSchedule
 	// 6. Build excludeRef from exclusions
 	hasCustomExclusions := len(req.Exclusions) > 0
 
-	// 7. Create SleepInfo objects for each namespace
+	// 7. Validate scheduleName uniqueness if provided
+	if req.ScheduleName != "" {
+		for suffix := range selectedNamespaces {
+			namespace := fmt.Sprintf("%s-%s", req.Tenant, suffix)
+			if err := s.validateScheduleNameUniqueness(ctx, namespace, req.ScheduleName); err != nil {
+				return err
+			}
+		}
+	}
+
+	// 8. Create SleepInfo objects for each namespace
 	// NO iterar sobre validSuffixes hardcodeados - usar los namespaces seleccionados dinámicamente
 	for suffix := range selectedNamespaces {
 		namespace := fmt.Sprintf("%s-%s", req.Tenant, suffix)
@@ -165,15 +175,15 @@ func (s *ScheduleService) CreateSchedule(ctx context.Context, req CreateSchedule
 			// Create SleepInfos based on namespace type using new functions
 			switch suffix {
 			case "datastores":
-				if err := s.createDatastoresSleepInfosWithExclusions(ctx, req.Tenant, namespace, offConv.TimeUTC, onDeployments, onPgHDFS, onPgBouncer, wdSleepUTC, wdWakeUTC, excludeRefs); err != nil {
+				if err := s.createDatastoresSleepInfosWithExclusions(ctx, req.Tenant, namespace, offConv.TimeUTC, onDeployments, onPgHDFS, onPgBouncer, wdSleepUTC, wdWakeUTC, excludeRefs, req.ScheduleName, req.Description); err != nil {
 					return fmt.Errorf("failed to create datastores sleepinfos: %w", err)
 				}
 			case "apps", "rocket", "intelligence":
-				if err := s.createNamespaceSleepInfoWithExclusions(ctx, req.Tenant, namespace, suffix, offConv.TimeUTC, onDeployments, wdSleepUTC, wdWakeUTC, false, excludeRefs); err != nil {
+				if err := s.createNamespaceSleepInfoWithExclusions(ctx, req.Tenant, namespace, suffix, offConv.TimeUTC, onDeployments, wdSleepUTC, wdWakeUTC, false, excludeRefs, req.ScheduleName, req.Description); err != nil {
 					return fmt.Errorf("failed to create %s sleepinfo: %w", suffix, err)
 				}
 			case "airflowsso":
-				if err := s.createNamespaceSleepInfoWithExclusions(ctx, req.Tenant, namespace, suffix, offConv.TimeUTC, onDeployments, wdSleepUTC, wdWakeUTC, true, excludeRefs); err != nil {
+				if err := s.createNamespaceSleepInfoWithExclusions(ctx, req.Tenant, namespace, suffix, offConv.TimeUTC, onDeployments, wdSleepUTC, wdWakeUTC, true, excludeRefs, req.ScheduleName, req.Description); err != nil {
 					return fmt.Errorf("failed to create airflowsso sleepinfo: %w", err)
 				}
 			}
@@ -181,15 +191,15 @@ func (s *ScheduleService) CreateSchedule(ctx context.Context, req CreateSchedule
 			// Use wrapper functions for backward compatibility when no custom delays/exclusions
 			switch suffix {
 			case "datastores":
-				if err := s.createDatastoresSleepInfos(ctx, req.Tenant, namespace, offConv.TimeUTC, onDeployments, onPgHDFS, onPgBouncer, wdSleepUTC, wdWakeUTC); err != nil {
+				if err := s.createDatastoresSleepInfos(ctx, req.Tenant, namespace, offConv.TimeUTC, onDeployments, onPgHDFS, onPgBouncer, wdSleepUTC, wdWakeUTC, req.ScheduleName, req.Description); err != nil {
 					return fmt.Errorf("failed to create datastores sleepinfos: %w", err)
 				}
 			case "apps", "rocket", "intelligence":
-				if err := s.createNamespaceSleepInfo(ctx, req.Tenant, namespace, suffix, offConv.TimeUTC, onDeployments, wdSleepUTC, wdWakeUTC, false); err != nil {
+				if err := s.createNamespaceSleepInfo(ctx, req.Tenant, namespace, suffix, offConv.TimeUTC, onDeployments, wdSleepUTC, wdWakeUTC, false, req.ScheduleName, req.Description); err != nil {
 					return fmt.Errorf("failed to create %s sleepinfo: %w", suffix, err)
 				}
 			case "airflowsso":
-				if err := s.createNamespaceSleepInfo(ctx, req.Tenant, namespace, suffix, offConv.TimeUTC, onDeployments, wdSleepUTC, wdWakeUTC, true); err != nil {
+				if err := s.createNamespaceSleepInfo(ctx, req.Tenant, namespace, suffix, offConv.TimeUTC, onDeployments, wdSleepUTC, wdWakeUTC, true, req.ScheduleName, req.Description); err != nil {
 					return fmt.Errorf("failed to create airflowsso sleepinfo: %w", err)
 				}
 			}
@@ -258,7 +268,7 @@ func isNamespaceSelected(selected map[string]bool, suffix string) bool {
 }
 
 // createNamespaceSleepInfoWithExclusions creates a simple SleepInfo for a namespace with custom exclusions
-func (s *ScheduleService) createNamespaceSleepInfoWithExclusions(ctx context.Context, tenant, namespace, suffix, offUTC, onUTC, wdSleep, wdWake string, suspendStatefulSets bool, excludeRefs []kubegreenv1alpha1.FilterRef) error {
+func (s *ScheduleService) createNamespaceSleepInfoWithExclusions(ctx context.Context, tenant, namespace, suffix, offUTC, onUTC, wdSleep, wdWake string, suspendStatefulSets bool, excludeRefs []kubegreenv1alpha1.FilterRef, scheduleName, description string) error {
 	// Check if weekdays are the same
 	sleepDays, _ := ExpandWeekdaysStr(wdSleep)
 	wakeDays, _ := ExpandWeekdaysStr(wdWake)
@@ -279,10 +289,27 @@ func (s *ScheduleService) createNamespaceSleepInfoWithExclusions(ctx context.Con
 		// Single SleepInfo with sleepAt and wakeUpAt
 		suspendDeployments := true
 		suspendCronJobs := true
+
+		// Generate name based on scheduleName or default pattern
+		name := fmt.Sprintf("%s-%s", tenant, suffix)
+		if scheduleName != "" {
+			name = scheduleName
+		}
+
+		// Initialize annotations with schedule name and description
+		annotations := make(map[string]string)
+		if scheduleName != "" {
+			annotations["kube-green.stratio.com/schedule-name"] = scheduleName
+		}
+		if description != "" {
+			annotations["kube-green.stratio.com/schedule-description"] = description
+		}
+
 		sleepInfo = &kubegreenv1alpha1.SleepInfo{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      fmt.Sprintf("%s-%s", tenant, suffix),
-				Namespace: namespace,
+				Name:        name,
+				Namespace:   namespace,
+				Annotations: annotations,
 			},
 			Spec: kubegreenv1alpha1.SleepInfoSpec{
 				Weekdays:           wdSleep,
@@ -314,18 +341,45 @@ func (s *ScheduleService) createNamespaceSleepInfoWithExclusions(ctx context.Con
 	} else {
 		// Separate SleepInfos for sleep and wake
 		sharedID := fmt.Sprintf("%s-%s", tenant, suffix)
+		if scheduleName != "" {
+			sharedID = scheduleName
+		}
+
 		suspendDeployments := true
 		suspendCronJobs := true
+
+		// Generate names based on scheduleName or default pattern
+		sleepName := fmt.Sprintf("sleep-%s-%s", tenant, suffix)
+		wakeName := fmt.Sprintf("wake-%s-%s", tenant, suffix)
+		if scheduleName != "" {
+			sleepName = fmt.Sprintf("sleep-%s", scheduleName)
+			wakeName = fmt.Sprintf("wake-%s", scheduleName)
+		}
+
+		// Initialize annotations with schedule name and description
+		sleepAnnotations := map[string]string{
+			"kube-green.stratio.com/pair-id":   sharedID,
+			"kube-green.stratio.com/pair-role": "sleep",
+		}
+		wakeAnnotations := map[string]string{
+			"kube-green.stratio.com/pair-id":   sharedID,
+			"kube-green.stratio.com/pair-role": "wake",
+		}
+		if scheduleName != "" {
+			sleepAnnotations["kube-green.stratio.com/schedule-name"] = scheduleName
+			wakeAnnotations["kube-green.stratio.com/schedule-name"] = scheduleName
+		}
+		if description != "" {
+			sleepAnnotations["kube-green.stratio.com/schedule-description"] = description
+			wakeAnnotations["kube-green.stratio.com/schedule-description"] = description
+		}
 
 		// Sleep SleepInfo
 		sleepSleepInfo := &kubegreenv1alpha1.SleepInfo{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      fmt.Sprintf("sleep-%s-%s", tenant, suffix),
-				Namespace: namespace,
-				Annotations: map[string]string{
-					"kube-green.stratio.com/pair-id":   sharedID,
-					"kube-green.stratio.com/pair-role": "sleep",
-				},
+				Name:        sleepName,
+				Namespace:   namespace,
+				Annotations: sleepAnnotations,
 			},
 			Spec: kubegreenv1alpha1.SleepInfoSpec{
 				Weekdays:           wdSleep,
@@ -343,12 +397,9 @@ func (s *ScheduleService) createNamespaceSleepInfoWithExclusions(ctx context.Con
 		// Wake SleepInfo
 		wakeSleepInfo := &kubegreenv1alpha1.SleepInfo{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      fmt.Sprintf("wake-%s-%s", tenant, suffix),
-				Namespace: namespace,
-				Annotations: map[string]string{
-					"kube-green.stratio.com/pair-id":   sharedID,
-					"kube-green.stratio.com/pair-role": "wake",
-				},
+				Name:        wakeName,
+				Namespace:   namespace,
+				Annotations: wakeAnnotations,
 			},
 			Spec: kubegreenv1alpha1.SleepInfoSpec{
 				Weekdays:           wdWake,
@@ -397,7 +448,7 @@ func (s *ScheduleService) createNamespaceSleepInfoWithExclusions(ctx context.Con
 }
 
 // createDatastoresSleepInfosWithExclusions creates the complex SleepInfos for datastores namespace with custom exclusions
-func (s *ScheduleService) createDatastoresSleepInfosWithExclusions(ctx context.Context, tenant, namespace, offUTC, onDeployments, onPgHDFS, onPgBouncer, wdSleep, wdWake string, excludeRefs []kubegreenv1alpha1.FilterRef) error {
+func (s *ScheduleService) createDatastoresSleepInfosWithExclusions(ctx context.Context, tenant, namespace, offUTC, onDeployments, onPgHDFS, onPgBouncer, wdSleep, wdWake string, excludeRefs []kubegreenv1alpha1.FilterRef, scheduleName, description string) error {
 	suspendDeployments := true
 	suspendStatefulSets := true
 	suspendCronJobs := true
@@ -420,17 +471,35 @@ func (s *ScheduleService) createDatastoresSleepInfosWithExclusions(ctx context.C
 	}
 
 	sharedID := fmt.Sprintf("%s-datastores", tenant)
+	if scheduleName != "" {
+		sharedID = scheduleName
+	}
 
 	if daysEqual {
 		// Single sleep SleepInfo with all resources
+		// Generate name based on scheduleName or default pattern
+		sleepName := fmt.Sprintf("sleep-ds-deploys-%s", tenant)
+		if scheduleName != "" {
+			sleepName = fmt.Sprintf("sleep-%s", scheduleName)
+		}
+
+		// Initialize annotations with schedule name and description
+		sleepAnnotations := map[string]string{
+			"kube-green.stratio.com/pair-id":   sharedID,
+			"kube-green.stratio.com/pair-role": "sleep",
+		}
+		if scheduleName != "" {
+			sleepAnnotations["kube-green.stratio.com/schedule-name"] = scheduleName
+		}
+		if description != "" {
+			sleepAnnotations["kube-green.stratio.com/schedule-description"] = description
+		}
+
 		sleepInfo := &kubegreenv1alpha1.SleepInfo{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      fmt.Sprintf("sleep-ds-deploys-%s", tenant),
-				Namespace: namespace,
-				Annotations: map[string]string{
-					"kube-green.stratio.com/pair-id":   sharedID,
-					"kube-green.stratio.com/pair-role": "sleep",
-				},
+				Name:        sleepName,
+				Namespace:   namespace,
+				Annotations: sleepAnnotations,
 			},
 			Spec: kubegreenv1alpha1.SleepInfoSpec{
 				Weekdays:                    wdSleep,
@@ -448,14 +517,27 @@ func (s *ScheduleService) createDatastoresSleepInfosWithExclusions(ctx context.C
 
 		// Create wake SleepInfos (staged)
 		// 1. Postgres and HDFS first
+		wakePgHdfsName := fmt.Sprintf("wake-ds-deploys-%s-pg-hdfs", tenant)
+		if scheduleName != "" {
+			wakePgHdfsName = fmt.Sprintf("wake-%s-pg-hdfs", scheduleName)
+		}
+
+		wakePgHdfsAnnotations := map[string]string{
+			"kube-green.stratio.com/pair-id":   sharedID,
+			"kube-green.stratio.com/pair-role": "wake",
+		}
+		if scheduleName != "" {
+			wakePgHdfsAnnotations["kube-green.stratio.com/schedule-name"] = scheduleName
+		}
+		if description != "" {
+			wakePgHdfsAnnotations["kube-green.stratio.com/schedule-description"] = description
+		}
+
 		wakePgHdfs := &kubegreenv1alpha1.SleepInfo{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      fmt.Sprintf("wake-ds-deploys-%s-pg-hdfs", tenant),
-				Namespace: namespace,
-				Annotations: map[string]string{
-					"kube-green.stratio.com/pair-id":   sharedID,
-					"kube-green.stratio.com/pair-role": "wake",
-				},
+				Name:        wakePgHdfsName,
+				Namespace:   namespace,
+				Annotations: wakePgHdfsAnnotations,
 			},
 			Spec: kubegreenv1alpha1.SleepInfoSpec{
 				Weekdays:                    wdWake,
@@ -468,14 +550,27 @@ func (s *ScheduleService) createDatastoresSleepInfosWithExclusions(ctx context.C
 		}
 
 		// 2. PgBouncer second
+		wakePgbouncerName := fmt.Sprintf("wake-ds-deploys-%s-pgbouncer", tenant)
+		if scheduleName != "" {
+			wakePgbouncerName = fmt.Sprintf("wake-%s-pgbouncer", scheduleName)
+		}
+
+		wakePgbouncerAnnotations := map[string]string{
+			"kube-green.stratio.com/pair-id":   sharedID,
+			"kube-green.stratio.com/pair-role": "wake",
+		}
+		if scheduleName != "" {
+			wakePgbouncerAnnotations["kube-green.stratio.com/schedule-name"] = scheduleName
+		}
+		if description != "" {
+			wakePgbouncerAnnotations["kube-green.stratio.com/schedule-description"] = description
+		}
+
 		wakePgbouncer := &kubegreenv1alpha1.SleepInfo{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      fmt.Sprintf("wake-ds-deploys-%s-pgbouncer", tenant),
-				Namespace: namespace,
-				Annotations: map[string]string{
-					"kube-green.stratio.com/pair-id":   sharedID,
-					"kube-green.stratio.com/pair-role": "wake",
-				},
+				Name:        wakePgbouncerName,
+				Namespace:   namespace,
+				Annotations: wakePgbouncerAnnotations,
 			},
 			Spec: kubegreenv1alpha1.SleepInfoSpec{
 				Weekdays:                    wdWake,
@@ -487,14 +582,27 @@ func (s *ScheduleService) createDatastoresSleepInfosWithExclusions(ctx context.C
 		}
 
 		// 3. Native deployments last
+		wakeDeploymentsName := fmt.Sprintf("wake-ds-deploys-%s", tenant)
+		if scheduleName != "" {
+			wakeDeploymentsName = fmt.Sprintf("wake-%s", scheduleName)
+		}
+
+		wakeDeploymentsAnnotations := map[string]string{
+			"kube-green.stratio.com/pair-id":   sharedID,
+			"kube-green.stratio.com/pair-role": "wake",
+		}
+		if scheduleName != "" {
+			wakeDeploymentsAnnotations["kube-green.stratio.com/schedule-name"] = scheduleName
+		}
+		if description != "" {
+			wakeDeploymentsAnnotations["kube-green.stratio.com/schedule-description"] = description
+		}
+
 		wakeDeployments := &kubegreenv1alpha1.SleepInfo{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      fmt.Sprintf("wake-ds-deploys-%s", tenant),
-				Namespace: namespace,
-				Annotations: map[string]string{
-					"kube-green.stratio.com/pair-id":   sharedID,
-					"kube-green.stratio.com/pair-role": "wake",
-				},
+				Name:        wakeDeploymentsName,
+				Namespace:   namespace,
+				Annotations: wakeDeploymentsAnnotations,
 			},
 			Spec: kubegreenv1alpha1.SleepInfoSpec{
 				Weekdays:                    wdWake,
@@ -523,15 +631,15 @@ func (s *ScheduleService) createDatastoresSleepInfosWithExclusions(ctx context.C
 }
 
 // createDatastoresSleepInfos creates the complex SleepInfos for datastores namespace (wrapper for backward compatibility)
-func (s *ScheduleService) createDatastoresSleepInfos(ctx context.Context, tenant, namespace, offUTC, onDeployments, onPgHDFS, onPgBouncer, wdSleep, wdWake string) error {
+func (s *ScheduleService) createDatastoresSleepInfos(ctx context.Context, tenant, namespace, offUTC, onDeployments, onPgHDFS, onPgBouncer, wdSleep, wdWake string, scheduleName, description string) error {
 	excludeRefs := getExcludeRefsForOperators()
-	return s.createDatastoresSleepInfosWithExclusions(ctx, tenant, namespace, offUTC, onDeployments, onPgHDFS, onPgBouncer, wdSleep, wdWake, excludeRefs)
+	return s.createDatastoresSleepInfosWithExclusions(ctx, tenant, namespace, offUTC, onDeployments, onPgHDFS, onPgBouncer, wdSleep, wdWake, excludeRefs, scheduleName, description)
 }
 
 // createNamespaceSleepInfo creates a simple SleepInfo for a namespace (wrapper for backward compatibility)
-func (s *ScheduleService) createNamespaceSleepInfo(ctx context.Context, tenant, namespace, suffix, offUTC, onUTC, wdSleep, wdWake string, suspendStatefulSets bool) error {
+func (s *ScheduleService) createNamespaceSleepInfo(ctx context.Context, tenant, namespace, suffix, offUTC, onUTC, wdSleep, wdWake string, suspendStatefulSets bool, scheduleName, description string) error {
 	excludeRefs := getExcludeRefsForOperators()
-	return s.createNamespaceSleepInfoWithExclusions(ctx, tenant, namespace, suffix, offUTC, onUTC, wdSleep, wdWake, suspendStatefulSets, excludeRefs)
+	return s.createNamespaceSleepInfoWithExclusions(ctx, tenant, namespace, suffix, offUTC, onUTC, wdSleep, wdWake, suspendStatefulSets, excludeRefs, scheduleName, description)
 }
 
 // getExcludeRefsForOperators returns exclude refs for operator-managed resources
@@ -544,6 +652,29 @@ func getExcludeRefsForOperators() []kubegreenv1alpha1.FilterRef {
 		{MatchLabels: map[string]string{"hdfs.stratio.com/cluster": "true"}},
 		{MatchLabels: map[string]string{"app.kubernetes.io/part-of": "hdfs"}},
 	}
+}
+
+// validateScheduleNameUniqueness checks if a schedule name is unique within a namespace
+func (s *ScheduleService) validateScheduleNameUniqueness(ctx context.Context, namespace, scheduleName string) error {
+	if scheduleName == "" {
+		return nil
+	}
+
+	// List all SleepInfo objects in the namespace
+	var sleepInfoList kubegreenv1alpha1.SleepInfoList
+	if err := s.client.List(ctx, &sleepInfoList, client.InNamespace(namespace)); err != nil {
+		// If namespace doesn't exist or error, skip validation (will fail later during creation)
+		return nil
+	}
+
+	// Check if any SleepInfo has the same schedule name in annotations
+	for _, si := range sleepInfoList.Items {
+		if existingName, ok := si.Annotations["kube-green.stratio.com/schedule-name"]; ok && existingName == scheduleName {
+			return fmt.Errorf("schedule name '%s' already exists in namespace '%s'", scheduleName, namespace)
+		}
+	}
+
+	return nil
 }
 
 // createOrUpdateSleepInfo creates or updates a SleepInfo
@@ -1107,7 +1238,7 @@ func (s *ScheduleService) ListTenants(ctx context.Context) (*TenantListResponse,
 		}
 		// Sort namespaces for consistent ordering
 		sort.Strings(nsList)
-		
+
 		// Debug: log bdadev namespaces in response
 		if tenant == "bdadev" {
 			s.logger.Info("ListTenants", "bdadev_response_namespaces", strings.Join(nsList, ","), "count", len(nsList))
@@ -1652,7 +1783,7 @@ func (s *ScheduleService) CreateNamespaceSchedule(ctx context.Context, req Names
 
 	if hasCRDs {
 		// Apply staggered wake logic when CRDs are detected
-		if err := s.createDatastoresSleepInfosWithExclusions(ctx, req.Tenant, namespace, offConv.TimeUTC, onDeployments, onPgHDFS, onPgBouncer, wdSleepUTC, wdWakeUTC, kubeExcludeRefs); err != nil {
+		if err := s.createDatastoresSleepInfosWithExclusions(ctx, req.Tenant, namespace, offConv.TimeUTC, onDeployments, onPgHDFS, onPgBouncer, wdSleepUTC, wdWakeUTC, kubeExcludeRefs, "", ""); err != nil {
 			return fmt.Errorf("failed to create staggered sleepinfos: %w", err)
 		}
 	} else {
@@ -1664,7 +1795,7 @@ func (s *ScheduleService) CreateNamespaceSchedule(ctx context.Context, req Names
 			suspendStatefulSets = true
 		}
 
-		if err := s.createNamespaceSleepInfoWithExclusions(ctx, req.Tenant, namespace, req.Namespace, offConv.TimeUTC, onDeployments, wdSleepUTC, wdWakeUTC, suspendStatefulSets, kubeExcludeRefs); err != nil {
+		if err := s.createNamespaceSleepInfoWithExclusions(ctx, req.Tenant, namespace, req.Namespace, offConv.TimeUTC, onDeployments, wdSleepUTC, wdWakeUTC, suspendStatefulSets, kubeExcludeRefs, "", ""); err != nil {
 			return fmt.Errorf("failed to create namespace sleepinfo: %w", err)
 		}
 	}

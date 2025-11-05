@@ -253,5 +253,3 @@ func ShiftWeekdaysStr(weekdays string, shift int) (string, error) {
 
 	return strings.Join(result, ","), nil
 }
-
-

@@ -194,18 +194,20 @@ type Exclusion struct {
 // CreateScheduleRequest represents a request to create a schedule
 // @Description Request to create a new sleep/wake schedule for a tenant
 type CreateScheduleRequest struct {
-	Tenant          string       `json:"tenant" binding:"required" example:"bdadevdat"`   // Tenant name (e.g., bdadevdat, bdadevprd)
-	UserTimezone    string       `json:"userTimezone,omitempty" example:"America/Bogota"` // User timezone (default: America/Bogota)
-	ClusterTimezone string       `json:"clusterTimezone,omitempty" example:"UTC"`         // Cluster timezone (default: UTC)
-	Off             string       `json:"off" binding:"required" example:"22:00"`          // Sleep time in user timezone (HH:MM format, 24-hour)
-	On              string       `json:"on" binding:"required" example:"06:00"`           // Wake time in user timezone (HH:MM format, 24-hour)
-	Weekdays        string       `json:"weekdays,omitempty" example:"lunes-viernes"`      // Days of week (human format: "lunes-viernes", or numeric: "1-5")
-	SleepDays       string       `json:"sleepDays,omitempty" example:"viernes"`           // Optional: specific days for sleep (overrides weekdays)
-	WakeDays        string       `json:"wakeDays,omitempty" example:"lunes"`              // Optional: specific days for wake (overrides weekdays)
-	Namespaces      []string     `json:"namespaces,omitempty" example:"datastores,apps"`  // Optional: limit to specific namespaces (datastores, apps, rocket, intelligence, airflowsso)
-	Delays          *DelayConfig `json:"delays,omitempty"`                                // Optional: configurable delays for each resource type
-	Exclusions      []Exclusion  `json:"exclusions,omitempty"`                            // Optional: resource exclusions by annotations/labels
-	Apply           bool         `json:"apply,omitempty"`                                 // Always applies to cluster (field is ignored but kept for compatibility)
+	Tenant          string       `json:"tenant" binding:"required" example:"bdadevdat"`                  // Tenant name (e.g., bdadevdat, bdadevprd)
+	ScheduleName    string       `json:"scheduleName,omitempty" example:"schedule-production"`           // Optional: Custom name for the schedule (must be unique per tenant/namespace)
+	Description     string       `json:"description,omitempty" example:"Horario de producción nocturno"` // Optional: Short description of the schedule
+	UserTimezone    string       `json:"userTimezone,omitempty" example:"America/Bogota"`                // User timezone (default: America/Bogota)
+	ClusterTimezone string       `json:"clusterTimezone,omitempty" example:"UTC"`                        // Cluster timezone (default: UTC)
+	Off             string       `json:"off" binding:"required" example:"22:00"`                         // Sleep time in user timezone (HH:MM format, 24-hour)
+	On              string       `json:"on" binding:"required" example:"06:00"`                          // Wake time in user timezone (HH:MM format, 24-hour)
+	Weekdays        string       `json:"weekdays,omitempty" example:"lunes-viernes"`                     // Days of week (human format: "lunes-viernes", or numeric: "1-5")
+	SleepDays       string       `json:"sleepDays,omitempty" example:"viernes"`                          // Optional: specific days for sleep (overrides weekdays)
+	WakeDays        string       `json:"wakeDays,omitempty" example:"lunes"`                             // Optional: specific days for wake (overrides weekdays)
+	Namespaces      []string     `json:"namespaces,omitempty" example:"datastores,apps"`                 // Optional: limit to specific namespaces (datastores, apps, rocket, intelligence, airflowsso)
+	Delays          *DelayConfig `json:"delays,omitempty"`                                               // Optional: configurable delays for each resource type
+	Exclusions      []Exclusion  `json:"exclusions,omitempty"`                                           // Optional: resource exclusions by annotations/labels
+	Apply           bool         `json:"apply,omitempty"`                                                // Always applies to cluster (field is ignored but kept for compatibility)
 }
 
 // NamespaceScheduleRequest represents a request to create/update a schedule for a single namespace
