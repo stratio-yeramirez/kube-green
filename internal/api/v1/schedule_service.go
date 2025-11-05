@@ -1078,9 +1078,9 @@ func (s *ScheduleService) ListTenants(ctx context.Context) (*TenantListResponse,
 			tenantMap[tenant] = make(map[string]bool)
 		}
 
-	// Add namespace suffix (prefix) dinámicamente
+		// Add namespace suffix (prefix) dinámicamente
 		tenantMap[tenant][suffix] = true
-		
+
 		// Debug: log bdadev namespaces as they're found
 		if tenant == "bdadev" {
 			s.logger.Info("ListTenants", "found_bdadev_namespace", suffix, "full_namespace", nsName)
@@ -1090,6 +1090,12 @@ func (s *ScheduleService) ListTenants(ctx context.Context) (*TenantListResponse,
 	s.logger.Info("ListTenants", "total_tenants_found", len(tenantMap))
 	if bdadevNamespaces, ok := tenantMap["bdadev"]; ok {
 		s.logger.Info("ListTenants", "bdadev_namespaces_count", len(bdadevNamespaces))
+		// Log all bdadev namespaces found
+		bdadevList := make([]string, 0, len(bdadevNamespaces))
+		for ns := range bdadevNamespaces {
+			bdadevList = append(bdadevList, ns)
+		}
+		s.logger.Info("ListTenants", "bdadev_namespaces_list", strings.Join(bdadevList, ","))
 	}
 
 	// Convert to response format
@@ -1101,6 +1107,11 @@ func (s *ScheduleService) ListTenants(ctx context.Context) (*TenantListResponse,
 		}
 		// Sort namespaces for consistent ordering
 		sort.Strings(nsList)
+		
+		// Debug: log bdadev namespaces in response
+		if tenant == "bdadev" {
+			s.logger.Info("ListTenants", "bdadev_response_namespaces", strings.Join(nsList, ","), "count", len(nsList))
+		}
 
 		tenants = append(tenants, TenantInfo{
 			Name:       tenant,
