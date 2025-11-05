@@ -139,24 +139,8 @@ func (s *Server) handleGetSchedule(c *gin.Context) {
 	// Get optional namespace filter from query parameter
 	namespaceFilter := c.Query("namespace")
 
-	// Validate namespace if provided
-	if namespaceFilter != "" {
-		valid := false
-		for _, validNS := range validSuffixes {
-			if namespaceFilter == validNS {
-				valid = true
-				break
-			}
-		}
-		if !valid {
-			c.JSON(http.StatusBadRequest, ErrorResponse{
-				Success: false,
-				Error:   fmt.Sprintf("invalid namespace '%s'. Valid options are: %s", namespaceFilter, ValidNamespaceSuffixes),
-				Code:    http.StatusBadRequest,
-			})
-			return
-		}
-	}
+	// NO VALIDAR contra validSuffixes - aceptar cualquier namespace dinámicamente
+	// El namespace se validará contra los namespaces reales existentes en el cluster
 
 	schedule, err := s.scheduleService.GetSchedule(c.Request.Context(), tenant, namespaceFilter)
 	if err != nil {
@@ -338,24 +322,8 @@ func (s *Server) handleUpdateSchedule(c *gin.Context) {
 	// Get optional namespace filter from query parameter
 	namespaceFilter := c.Query("namespace")
 
-	// Validate namespace if provided
-	if namespaceFilter != "" {
-		valid := false
-		for _, validNS := range validSuffixes {
-			if namespaceFilter == validNS {
-				valid = true
-				break
-			}
-		}
-		if !valid {
-			c.JSON(http.StatusBadRequest, ErrorResponse{
-				Success: false,
-				Error:   fmt.Sprintf("invalid namespace '%s'. Valid options are: %s", namespaceFilter, ValidNamespaceSuffixes),
-				Code:    http.StatusBadRequest,
-			})
-			return
-		}
-	}
+	// NO VALIDAR contra validSuffixes - aceptar cualquier namespace dinámicamente
+	// El namespace se validará contra los namespaces reales existentes en el cluster
 
 	var req UpdateScheduleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -464,24 +432,8 @@ func (s *Server) handleDeleteSchedule(c *gin.Context) {
 	// Get optional namespace filter from query parameter
 	namespaceFilter := c.Query("namespace")
 
-	// Validate namespace if provided
-	if namespaceFilter != "" {
-		valid := false
-		for _, validNS := range validSuffixes {
-			if namespaceFilter == validNS {
-				valid = true
-				break
-			}
-		}
-		if !valid {
-			c.JSON(http.StatusBadRequest, ErrorResponse{
-				Success: false,
-				Error:   fmt.Sprintf("invalid namespace '%s'. Valid options are: %s", namespaceFilter, ValidNamespaceSuffixes),
-				Code:    http.StatusBadRequest,
-			})
-			return
-		}
-	}
+	// NO VALIDAR contra validSuffixes - aceptar cualquier namespace dinámicamente
+	// El namespace se validará contra los namespaces reales existentes en el cluster
 
 	if err := s.scheduleService.DeleteSchedule(c.Request.Context(), tenant, namespaceFilter); err != nil {
 		if strings.Contains(err.Error(), "no schedules found") {

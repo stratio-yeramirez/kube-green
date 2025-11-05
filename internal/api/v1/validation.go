@@ -57,18 +57,17 @@ func ValidateCreateSchedule(req CreateScheduleRequest) error {
 		}
 	}
 
-	// Validate namespaces if provided
+	// NO VALIDAR namespaces contra validSuffixes hardcodeados
+	// Los namespaces serán validados dinámicamente contra los namespaces reales del cluster
+	// Solo validar formato básico (no vacío, sin caracteres especiales)
 	if len(req.Namespaces) > 0 {
 		for _, ns := range req.Namespaces {
-			valid := false
-			for _, validSuffix := range validSuffixes {
-				if ns == validSuffix {
-					valid = true
-					break
-				}
+			if ns == "" {
+				return fmt.Errorf("namespace cannot be empty")
 			}
-			if !valid {
-				return fmt.Errorf("invalid namespace: %s (valid values: %s)", ns, ValidNamespaceSuffixes)
+			// Validar formato básico: solo letras, números y guiones
+			if !regexp.MustCompile(`^[a-z0-9-]+$`).MatchString(ns) {
+				return fmt.Errorf("invalid namespace format: %s (only lowercase letters, numbers, and hyphens allowed)", ns)
 			}
 		}
 	}
@@ -113,18 +112,17 @@ func ValidateUpdateSchedule(req UpdateScheduleRequest) error {
 		}
 	}
 
-	// Validate namespaces if provided
+	// NO VALIDAR namespaces contra validSuffixes hardcodeados
+	// Los namespaces serán validados dinámicamente contra los namespaces reales del cluster
+	// Solo validar formato básico (no vacío, sin caracteres especiales)
 	if len(req.Namespaces) > 0 {
 		for _, ns := range req.Namespaces {
-			valid := false
-			for _, validSuffix := range validSuffixes {
-				if ns == validSuffix {
-					valid = true
-					break
-				}
+			if ns == "" {
+				return fmt.Errorf("namespace cannot be empty")
 			}
-			if !valid {
-				return fmt.Errorf("invalid namespace: %s (valid values: %s)", ns, ValidNamespaceSuffixes)
+			// Validar formato básico: solo letras, números y guiones
+			if !regexp.MustCompile(`^[a-z0-9-]+$`).MatchString(ns) {
+				return fmt.Errorf("invalid namespace format: %s (only lowercase letters, numbers, and hyphens allowed)", ns)
 			}
 		}
 	}

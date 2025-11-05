@@ -144,11 +144,8 @@ func (s *ScheduleService) CreateSchedule(ctx context.Context, req CreateSchedule
 	hasCustomExclusions := len(req.Exclusions) > 0
 
 	// 7. Create SleepInfo objects for each namespace
-	for _, suffix := range validSuffixes {
-		if !isNamespaceSelected(selectedNamespaces, suffix) {
-			continue
-		}
-
+	// NO iterar sobre validSuffixes hardcodeados - usar los namespaces seleccionados dinámicamente
+	for suffix := range selectedNamespaces {
 		namespace := fmt.Sprintf("%s-%s", req.Tenant, suffix)
 
 		// Build excludeRef from exclusions
@@ -235,31 +232,21 @@ func parseDelayToMinutes(delayStr string) (int, error) {
 }
 
 // normalizeNamespaces normalizes namespace input
+// NO filtra por validSuffixes - acepta cualquier namespace dinámicamente
 func normalizeNamespaces(nsInput []string) map[string]bool {
+	result := make(map[string]bool)
+	
+	// Si no hay input, retornar mapa vacío (no todos los namespaces por defecto)
+	// El llamado debe especificar explícitamente los namespaces deseados
 	if len(nsInput) == 0 {
-		// All namespaces
-		result := make(map[string]bool)
-		for _, s := range validSuffixes {
-			result[s] = true
-		}
 		return result
 	}
 
-	result := make(map[string]bool)
+	// Agregar todos los namespaces proporcionados (sin filtrar por validSuffixes)
 	for _, ns := range nsInput {
 		ns = strings.ToLower(strings.TrimSpace(ns))
-		for _, valid := range validSuffixes {
-			if ns == valid {
-				result[valid] = true
-				break
-			}
-		}
-	}
-
-	if len(result) == 0 {
-		// If nothing valid, use all
-		for _, s := range validSuffixes {
-			result[s] = true
+		if ns != "" {
+			result[ns] = true
 		}
 	}
 
