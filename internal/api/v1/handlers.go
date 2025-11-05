@@ -213,16 +213,18 @@ type CreateScheduleRequest struct {
 // NamespaceScheduleRequest represents a request to create/update a schedule for a single namespace
 // @Description Request to create or update a sleep/wake schedule for a specific namespace
 type NamespaceScheduleRequest struct {
-	Tenant          string           `json:"tenant" binding:"required" example:"bdadevdat"`     // Tenant name
-	Namespace       string           `json:"namespace" binding:"required" example:"datastores"` // Namespace suffix (datastores, apps, etc.)
-	UserTimezone    string           `json:"userTimezone,omitempty" example:"America/Bogota"`   // User timezone (default: America/Bogota)
-	ClusterTimezone string           `json:"clusterTimezone,omitempty" example:"UTC"`           // Cluster timezone (default: UTC)
-	Off             string           `json:"off" binding:"required" example:"21:30"`            // Sleep time in user timezone (HH:MM format)
-	On              string           `json:"on" binding:"required" example:"06:00"`             // Wake time in user timezone (HH:MM format)
-	WeekdaysSleep   string           `json:"weekdaysSleep" example:"6"`                         // Days for sleep (format: "0-6" or "lunes-viernes")
-	WeekdaysWake    string           `json:"weekdaysWake" example:"0"`                          // Days for wake (format: "0-6" or "lunes-viernes")
-	Delays          *WakeDelayConfig `json:"delays,omitempty"`                                  // Optional: configurable delays for staggered wake-up
-	Exclusions      []Exclusion      `json:"exclusions,omitempty"`                              // Optional: resource exclusions by labels
+	Tenant          string           `json:"tenant" binding:"required" example:"bdadevdat"`                // Tenant name
+	Namespace       string           `json:"namespace" binding:"required" example:"datastores"`          // Namespace suffix (datastores, apps, etc.)
+	ScheduleName    string           `json:"scheduleName,omitempty" example:"schedule-production"`       // Optional: Custom name for the schedule (must be unique per tenant/namespace)
+	Description     string           `json:"description,omitempty" example:"Horario de producción nocturno"` // Optional: Short description of the schedule
+	UserTimezone    string           `json:"userTimezone,omitempty" example:"America/Bogota"`            // User timezone (default: America/Bogota)
+	ClusterTimezone string           `json:"clusterTimezone,omitempty" example:"UTC"`                   // Cluster timezone (default: UTC)
+	Off             string           `json:"off" binding:"required" example:"21:30"`                     // Sleep time in user timezone (HH:MM format)
+	On              string           `json:"on" binding:"required" example:"06:00"`                      // Wake time in user timezone (HH:MM format)
+	WeekdaysSleep   string           `json:"weekdaysSleep" example:"0-6"`                                 // Sleep weekdays (0=Sunday, 6=Saturday, can be range like "0-6" or comma-separated like "1,3,5")
+	WeekdaysWake    string           `json:"weekdaysWake,omitempty" example:"0-6"`                       // Wake weekdays (defaults to weekdaysSleep if not provided)
+	Delays          *WakeDelayConfig `json:"delays,omitempty"`                                           // Optional: Staggered wake-up delays
+	Exclusions      []Exclusion      `json:"exclusions,omitempty"`                                       // Optional: Custom exclusions
 }
 
 // handleCreateSchedule creates a new schedule
@@ -718,6 +720,16 @@ func (s *Server) handleCreateNamespaceSchedule(c *gin.Context) {
 	req.Tenant = tenant
 	req.Namespace = namespace
 
+	// Validate request
+	if err := ValidateNamespaceSchedule(req); err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{
+			Success: false,
+			Error:   err.Error(),
+			Code:    http.StatusBadRequest,
+		})
+		return
+	}
+
 	if err := s.scheduleService.CreateNamespaceSchedule(c.Request.Context(), req); err != nil {
 		s.logger.Error(err, "failed to create namespace schedule", "tenant", tenant, "namespace", namespace)
 		handleKubernetesError(c, err)
@@ -770,6 +782,16 @@ func (s *Server) handleUpdateNamespaceSchedule(c *gin.Context) {
 	// Override tenant and namespace from path (more secure)
 	req.Tenant = tenant
 	req.Namespace = namespace
+
+	// Validate request
+	if err := ValidateNamespaceSchedule(req); err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{
+			Success: false,
+			Error:   err.Error(),
+			Code:    http.StatusBadRequest,
+		})
+		return
+	}
 
 	if err := s.scheduleService.UpdateNamespaceSchedule(c.Request.Context(), req); err != nil {
 		if strings.Contains(err.Error(), "not found") {

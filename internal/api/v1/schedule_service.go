@@ -1759,6 +1759,14 @@ func (s *ScheduleService) CreateNamespaceSchedule(ctx context.Context, req Names
 		}
 	}
 
+	// 7. Validate scheduleName uniqueness if provided
+	if req.ScheduleName != "" {
+		namespace := fmt.Sprintf("%s-%s", req.Tenant, req.Namespace)
+		if err := s.validateScheduleNameUniqueness(ctx, namespace, req.ScheduleName); err != nil {
+			return err
+		}
+	}
+
 	// Add Virtualizer exclusion for apps namespace
 	if req.Namespace == "apps" && resources.HasVirtualizer {
 		excludeRefs = append(excludeRefs, ExclusionFilter{
@@ -1783,7 +1791,7 @@ func (s *ScheduleService) CreateNamespaceSchedule(ctx context.Context, req Names
 
 	if hasCRDs {
 		// Apply staggered wake logic when CRDs are detected
-		if err := s.createDatastoresSleepInfosWithExclusions(ctx, req.Tenant, namespace, offConv.TimeUTC, onDeployments, onPgHDFS, onPgBouncer, wdSleepUTC, wdWakeUTC, kubeExcludeRefs, "", ""); err != nil {
+		if err := s.createDatastoresSleepInfosWithExclusions(ctx, req.Tenant, namespace, offConv.TimeUTC, onDeployments, onPgHDFS, onPgBouncer, wdSleepUTC, wdWakeUTC, kubeExcludeRefs, req.ScheduleName, req.Description); err != nil {
 			return fmt.Errorf("failed to create staggered sleepinfos: %w", err)
 		}
 	} else {
@@ -1795,7 +1803,7 @@ func (s *ScheduleService) CreateNamespaceSchedule(ctx context.Context, req Names
 			suspendStatefulSets = true
 		}
 
-		if err := s.createNamespaceSleepInfoWithExclusions(ctx, req.Tenant, namespace, req.Namespace, offConv.TimeUTC, onDeployments, wdSleepUTC, wdWakeUTC, suspendStatefulSets, kubeExcludeRefs, "", ""); err != nil {
+		if err := s.createNamespaceSleepInfoWithExclusions(ctx, req.Tenant, namespace, req.Namespace, offConv.TimeUTC, onDeployments, wdSleepUTC, wdWakeUTC, suspendStatefulSets, kubeExcludeRefs, req.ScheduleName, req.Description); err != nil {
 			return fmt.Errorf("failed to create namespace sleepinfo: %w", err)
 		}
 	}
