@@ -227,15 +227,15 @@ type CreateScheduleRequest struct {
 // NamespaceScheduleRequest represents a request to create/update a schedule for a single namespace
 // @Description Request to create or update a sleep/wake schedule for a specific namespace
 type NamespaceScheduleRequest struct {
-	Tenant          string           `json:"tenant" binding:"required" example:"bdadevdat"`   // Tenant name
+	Tenant          string           `json:"tenant" binding:"required" example:"bdadevdat"`     // Tenant name
 	Namespace       string           `json:"namespace" binding:"required" example:"datastores"` // Namespace suffix (datastores, apps, etc.)
-	UserTimezone    string           `json:"userTimezone,omitempty" example:"America/Bogota"`  // User timezone (default: America/Bogota)
-	ClusterTimezone string           `json:"clusterTimezone,omitempty" example:"UTC"`         // Cluster timezone (default: UTC)
-	Off             string           `json:"off" binding:"required" example:"21:30"`           // Sleep time in user timezone (HH:MM format)
-	On              string           `json:"on" binding:"required" example:"06:00"`            // Wake time in user timezone (HH:MM format)
-	WeekdaysSleep   string           `json:"weekdaysSleep" example:"6"`                        // Days for sleep (format: "0-6" or "lunes-viernes")
+	UserTimezone    string           `json:"userTimezone,omitempty" example:"America/Bogota"`   // User timezone (default: America/Bogota)
+	ClusterTimezone string           `json:"clusterTimezone,omitempty" example:"UTC"`           // Cluster timezone (default: UTC)
+	Off             string           `json:"off" binding:"required" example:"21:30"`            // Sleep time in user timezone (HH:MM format)
+	On              string           `json:"on" binding:"required" example:"06:00"`             // Wake time in user timezone (HH:MM format)
+	WeekdaysSleep   string           `json:"weekdaysSleep" example:"6"`                         // Days for sleep (format: "0-6" or "lunes-viernes")
 	WeekdaysWake    string           `json:"weekdaysWake" example:"0"`                          // Days for wake (format: "0-6" or "lunes-viernes")
-	Delays          *WakeDelayConfig `json:"delays,omitempty"`                                 // Optional: configurable delays for staggered wake-up
+	Delays          *WakeDelayConfig `json:"delays,omitempty"`                                  // Optional: configurable delays for staggered wake-up
 	Exclusions      []Exclusion      `json:"exclusions,omitempty"`                              // Optional: resource exclusions by labels
 }
 

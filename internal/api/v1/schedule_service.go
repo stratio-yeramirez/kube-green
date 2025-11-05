@@ -1444,34 +1444,34 @@ func (s *ScheduleService) GetNamespaceResources(ctx context.Context, tenant, nam
 
 // NamespaceScheduleResponse represents a schedule response for a single namespace
 type NamespaceScheduleResponse struct {
-	Tenant    string          `json:"tenant"`
-	Namespace string          `json:"namespace"`
+	Tenant     string            `json:"tenant"`
+	Namespace  string            `json:"namespace"`
 	SleepInfos []SleepInfoDetail `json:"sleepInfos"`
 }
 
 // SleepInfoDetail represents detailed information about a SleepInfo
 type SleepInfoDetail struct {
-	Name                     string            `json:"name"`
-	Namespace                string            `json:"namespace"`
-	Weekdays                 string            `json:"weekdays"`
-	SleepAt                  string            `json:"sleepAt,omitempty"`
-	WakeUpAt                 string            `json:"wakeUpAt,omitempty"`
-	TimeZone                 string            `json:"timeZone"`
-	Role                     string            `json:"role,omitempty"` // "sleep" or "wake" from annotations
-	SuspendDeployments       bool              `json:"suspendDeployments"`
-	SuspendStatefulSets      bool              `json:"suspendStatefulSets"`
-	SuspendCronJobs          bool              `json:"suspendCronJobs"`
-	SuspendDeploymentsPgbouncer bool          `json:"suspendDeploymentsPgbouncer,omitempty"`
-	SuspendStatefulSetsPostgres bool           `json:"suspendStatefulSetsPostgres,omitempty"`
-	SuspendStatefulSetsHdfs  bool              `json:"suspendStatefulSetsHdfs,omitempty"`
-	ExcludeRef               []ExclusionFilter `json:"excludeRef,omitempty"`
-	Annotations              map[string]string `json:"annotations,omitempty"`
+	Name                        string            `json:"name"`
+	Namespace                   string            `json:"namespace"`
+	Weekdays                    string            `json:"weekdays"`
+	SleepAt                     string            `json:"sleepAt,omitempty"`
+	WakeUpAt                    string            `json:"wakeUpAt,omitempty"`
+	TimeZone                    string            `json:"timeZone"`
+	Role                        string            `json:"role,omitempty"` // "sleep" or "wake" from annotations
+	SuspendDeployments          bool              `json:"suspendDeployments"`
+	SuspendStatefulSets         bool              `json:"suspendStatefulSets"`
+	SuspendCronJobs             bool              `json:"suspendCronJobs"`
+	SuspendDeploymentsPgbouncer bool              `json:"suspendDeploymentsPgbouncer,omitempty"`
+	SuspendStatefulSetsPostgres bool              `json:"suspendStatefulSetsPostgres,omitempty"`
+	SuspendStatefulSetsHdfs     bool              `json:"suspendStatefulSetsHdfs,omitempty"`
+	ExcludeRef                  []ExclusionFilter `json:"excludeRef,omitempty"`
+	Annotations                 map[string]string `json:"annotations,omitempty"`
 }
 
 // GetNamespaceSchedule gets SleepInfos for a specific namespace
 func (s *ScheduleService) GetNamespaceSchedule(ctx context.Context, tenant, namespaceSuffix string) (*NamespaceScheduleResponse, error) {
 	namespace := fmt.Sprintf("%s-%s", tenant, namespaceSuffix)
-	
+
 	// List SleepInfos in the namespace
 	sleepInfoList := &kubegreenv1alpha1.SleepInfoList{}
 	if err := s.client.List(ctx, sleepInfoList, client.InNamespace(namespace)); err != nil {
@@ -1496,7 +1496,7 @@ func (s *ScheduleService) GetNamespaceSchedule(ctx context.Context, tenant, name
 			SuspendStatefulSets:         si.Spec.SuspendStatefulSets != nil && *si.Spec.SuspendStatefulSets,
 			SuspendCronJobs:             si.Spec.SuspendCronjobs,
 			SuspendDeploymentsPgbouncer: si.Spec.SuspendDeploymentsPgbouncer != nil && *si.Spec.SuspendDeploymentsPgbouncer,
-			SuspendStatefulSetsPostgres:  si.Spec.SuspendStatefulSetsPostgres != nil && *si.Spec.SuspendStatefulSetsPostgres,
+			SuspendStatefulSetsPostgres: si.Spec.SuspendStatefulSetsPostgres != nil && *si.Spec.SuspendStatefulSetsPostgres,
 			SuspendStatefulSetsHdfs:     si.Spec.SuspendStatefulSetsHdfs != nil && *si.Spec.SuspendStatefulSetsHdfs,
 			Annotations:                 si.Annotations,
 		}
@@ -1520,8 +1520,8 @@ func (s *ScheduleService) GetNamespaceSchedule(ctx context.Context, tenant, name
 	}
 
 	return &NamespaceScheduleResponse{
-		Tenant:    tenant,
-		Namespace: namespaceSuffix,
+		Tenant:     tenant,
+		Namespace:  namespaceSuffix,
 		SleepInfos: sleepInfos,
 	}, nil
 }
@@ -1604,8 +1604,8 @@ func (s *ScheduleService) CreateNamespaceSchedule(ctx context.Context, req Names
 		}
 	} else {
 		// Default delays (like Python script)
-		onPgHDFS = onConv.TimeUTC                    // t0
-		onPgBouncer, _ = AddMinutes(onConv.TimeUTC, 5)  // t0+5m
+		onPgHDFS = onConv.TimeUTC                        // t0
+		onPgBouncer, _ = AddMinutes(onConv.TimeUTC, 5)   // t0+5m
 		onDeployments, _ = AddMinutes(onConv.TimeUTC, 7) // t0+7m
 	}
 

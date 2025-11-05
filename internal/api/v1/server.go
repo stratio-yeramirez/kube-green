@@ -99,7 +99,7 @@ func (s *Server) setupRoutes() {
 		v1.POST("", s.handleCreateSchedule)
 		v1.PUT("/:tenant", s.handleUpdateSchedule)
 		v1.DELETE("/:tenant", s.handleDeleteSchedule)
-		
+
 		// Namespace-specific schedule endpoints
 		v1.GET("/:tenant/:namespace", s.handleGetNamespaceSchedule)
 		v1.POST("/:tenant/:namespace", s.handleCreateNamespaceSchedule)
