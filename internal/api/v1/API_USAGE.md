@@ -239,3 +239,5 @@ The API can be integrated with:
 - Secrets are automatically managed (created/updated/deleted)
 - The API uses the same Kubernetes client as the controller, ensuring consistency
 
+
+

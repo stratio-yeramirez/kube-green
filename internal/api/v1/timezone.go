@@ -85,6 +85,76 @@ func ToUTCHHMM(localHHMM, tzLocal string) (TimeConversion, error) {
 	}, nil
 }
 
+// ToUTCHHMMWithTimezone converts time from user timezone to cluster timezone
+// Returns the cluster time and day shift (-1, 0, or +1)
+func ToUTCHHMMWithTimezone(userHHMM, userTZ, clusterTZ string) (TimeConversion, error) {
+	if userTZ == "" {
+		userTZ = TZLocal
+	}
+	if clusterTZ == "" {
+		clusterTZ = TZUTC
+	}
+
+	// If same timezone, no conversion needed
+	if userTZ == clusterTZ {
+		return TimeConversion{
+			TimeUTC:  userHHMM,
+			DayShift: 0,
+		}, nil
+	}
+
+	// Parse input time
+	var hour, minute int
+	if _, err := fmt.Sscanf(userHHMM, "%d:%d", &hour, &minute); err != nil {
+		return TimeConversion{}, fmt.Errorf("invalid time format: %s (expected HH:MM)", userHHMM)
+	}
+
+	if hour < 0 || hour > 23 || minute < 0 || minute > 59 {
+		return TimeConversion{}, fmt.Errorf("invalid time values: hour=%d minute=%d", hour, minute)
+	}
+
+	// Load timezones
+	userTZLoc, err := time.LoadLocation(userTZ)
+	if err != nil {
+		return TimeConversion{}, fmt.Errorf("invalid user timezone: %s", userTZ)
+	}
+
+	clusterTZLoc, err := time.LoadLocation(clusterTZ)
+	if err != nil {
+		return TimeConversion{}, fmt.Errorf("invalid cluster timezone: %s", clusterTZ)
+	}
+
+	// Create datetime in user timezone
+	today := time.Now().In(userTZLoc)
+	userTime := time.Date(today.Year(), today.Month(), today.Day(), hour, minute, 0, 0, userTZLoc)
+
+	// Convert to cluster timezone
+	clusterTime := userTime.In(clusterTZLoc)
+
+	// Calculate day shift by comparing the day of year
+	userYearDay := userTime.YearDay()
+	clusterYearDay := clusterTime.YearDay()
+	userYear := userTime.Year()
+	clusterYear := clusterTime.Year()
+
+	var dayShift int
+	if userYear == clusterYear {
+		dayShift = clusterYearDay - userYearDay
+	} else {
+		userDaysSinceEpoch := userTime.Unix() / 86400
+		clusterDaysSinceEpoch := clusterTime.Unix() / 86400
+		dayShift = int(clusterDaysSinceEpoch - userDaysSinceEpoch)
+	}
+
+	// Format cluster time
+	clusterHHMM := fmt.Sprintf("%02d:%02d", clusterTime.Hour(), clusterTime.Minute())
+
+	return TimeConversion{
+		TimeUTC:  clusterHHMM,
+		DayShift: dayShift,
+	}, nil
+}
+
 // AddMinutes adds minutes to a time string (HH:MM) and returns HH:MM
 func AddMinutes(hhmm string, minutes int) (string, error) {
 	var hour, minute int

@@ -83,11 +83,18 @@ func (s *Server) setupRoutes() {
 	s.router.GET("/ready", s.handleReady)
 	s.router.GET("/api/v1/info", s.handleInfo)
 
+	// Tenant discovery endpoints
+	s.router.GET("/api/v1/tenants", s.handleListTenants)
+
+	// Namespace services endpoints
+	s.router.GET("/api/v1/namespaces/:tenant/services", s.handleGetNamespaceServices)
+
 	// Schedule management endpoints
 	v1 := s.router.Group("/api/v1/schedules")
 	{
 		v1.GET("", s.handleListSchedules)
 		v1.GET("/:tenant", s.handleGetSchedule)
+		v1.GET("/:tenant/suspended", s.handleGetSuspendedServices)
 		v1.POST("", s.handleCreateSchedule)
 		v1.PUT("/:tenant", s.handleUpdateSchedule)
 		v1.DELETE("/:tenant", s.handleDeleteSchedule)
