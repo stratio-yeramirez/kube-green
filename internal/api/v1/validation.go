@@ -129,5 +129,3 @@ func ValidateUpdateSchedule(req UpdateScheduleRequest) error {
 
 	return nil
 }
-
-
