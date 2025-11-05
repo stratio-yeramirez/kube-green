@@ -189,6 +189,13 @@ type DelayConfig struct {
 	SuspendStatefulSetsHdfs     string `json:"suspendStatefulSetsHdfs,omitempty" example:"0m"`     // Delay for hdfs statefulsets
 }
 
+// WakeDelayConfig represents configurable delays for staggered wake-up (time AFTER base wake time)
+type WakeDelayConfig struct {
+	PgHdfsDelay      string `json:"pgHdfsDelay,omitempty" example:"0m"`      // Delay for PgCluster + HDFSCluster (default: "0m" = t0)
+	PgbouncerDelay   string `json:"pgbouncerDelay,omitempty" example:"5m"`   // Delay for PgBouncer (default: "5m" = t0+5m)
+	DeploymentsDelay string `json:"deploymentsDelay,omitempty" example:"7m"` // Delay for Deployments nativos (default: "7m" = t0+7m)
+}
+
 // ExclusionFilter represents a filter for excluding resources
 type ExclusionFilter struct {
 	MatchLabels map[string]string `json:"matchLabels" example:"app.kubernetes.io/managed-by:postgres-operator"`
@@ -215,6 +222,21 @@ type CreateScheduleRequest struct {
 	Delays          *DelayConfig `json:"delays,omitempty"`                                // Optional: configurable delays for each resource type
 	Exclusions      []Exclusion  `json:"exclusions,omitempty"`                            // Optional: resource exclusions by annotations/labels
 	Apply           bool         `json:"apply,omitempty"`                                 // Always applies to cluster (field is ignored but kept for compatibility)
+}
+
+// NamespaceScheduleRequest represents a request to create/update a schedule for a single namespace
+// @Description Request to create or update a sleep/wake schedule for a specific namespace
+type NamespaceScheduleRequest struct {
+	Tenant          string           `json:"tenant" binding:"required" example:"bdadevdat"`   // Tenant name
+	Namespace       string           `json:"namespace" binding:"required" example:"datastores"` // Namespace suffix (datastores, apps, etc.)
+	UserTimezone    string           `json:"userTimezone,omitempty" example:"America/Bogota"`  // User timezone (default: America/Bogota)
+	ClusterTimezone string           `json:"clusterTimezone,omitempty" example:"UTC"`         // Cluster timezone (default: UTC)
+	Off             string           `json:"off" binding:"required" example:"21:30"`           // Sleep time in user timezone (HH:MM format)
+	On              string           `json:"on" binding:"required" example:"06:00"`            // Wake time in user timezone (HH:MM format)
+	WeekdaysSleep   string           `json:"weekdaysSleep" example:"6"`                        // Days for sleep (format: "0-6" or "lunes-viernes")
+	WeekdaysWake    string           `json:"weekdaysWake" example:"0"`                          // Days for wake (format: "0-6" or "lunes-viernes")
+	Delays          *WakeDelayConfig `json:"delays,omitempty"`                                 // Optional: configurable delays for staggered wake-up
+	Exclusions      []Exclusion      `json:"exclusions,omitempty"`                              // Optional: resource exclusions by labels
 }
 
 // handleCreateSchedule creates a new schedule
@@ -644,6 +666,219 @@ func (s *Server) handleGetSuspendedServices(c *gin.Context) {
 	c.JSON(http.StatusOK, APIResponse{
 		Success: true,
 		Data:    suspended,
+	})
+}
+
+// handleGetNamespaceSchedule gets schedule for a specific namespace
+// @Summary Get namespace schedule
+// @Description Gets SleepInfo configurations for a specific namespace
+// @Tags Schedules
+// @Accept json
+// @Produce json
+// @Param tenant path string true "Tenant name" example:"bdadevdat"
+// @Param namespace path string true "Namespace suffix" example:"datastores"
+// @Success 200 {object} APIResponse "Schedule retrieved successfully"
+// @Failure 404 {object} ErrorResponse "Schedule not found"
+// @Failure 500 {object} ErrorResponse "Internal server error"
+// @Router /api/v1/schedules/{tenant}/{namespace} [get]
+func (s *Server) handleGetNamespaceSchedule(c *gin.Context) {
+	tenant := c.Param("tenant")
+	namespace := c.Param("namespace")
+
+	if tenant == "" {
+		c.JSON(http.StatusBadRequest, ErrorResponse{
+			Success: false,
+			Error:   "tenant parameter is required",
+			Code:    http.StatusBadRequest,
+		})
+		return
+	}
+
+	if namespace == "" {
+		c.JSON(http.StatusBadRequest, ErrorResponse{
+			Success: false,
+			Error:   "namespace parameter is required",
+			Code:    http.StatusBadRequest,
+		})
+		return
+	}
+
+	schedule, err := s.scheduleService.GetNamespaceSchedule(c.Request.Context(), tenant, namespace)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			c.JSON(http.StatusNotFound, ErrorResponse{
+				Success: false,
+				Error:   err.Error(),
+				Code:    http.StatusNotFound,
+			})
+			return
+		}
+		s.logger.Error(err, "failed to get namespace schedule", "tenant", tenant, "namespace", namespace)
+		handleKubernetesError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, APIResponse{
+		Success: true,
+		Data:    schedule,
+	})
+}
+
+// handleCreateNamespaceSchedule creates a schedule for a specific namespace
+// @Summary Create namespace schedule
+// @Description Creates SleepInfo configurations for a specific namespace using dynamic resource detection
+// @Tags Schedules
+// @Accept json
+// @Produce json
+// @Param tenant path string true "Tenant name" example:"bdadevdat"
+// @Param namespace path string true "Namespace suffix" example:"datastores"
+// @Param request body NamespaceScheduleRequest true "Schedule configuration"
+// @Success 201 {object} APIResponse "Schedule created successfully"
+// @Failure 400 {object} ErrorResponse "Invalid request parameters"
+// @Failure 500 {object} ErrorResponse "Internal server error"
+// @Router /api/v1/schedules/{tenant}/{namespace} [post]
+func (s *Server) handleCreateNamespaceSchedule(c *gin.Context) {
+	tenant := c.Param("tenant")
+	namespace := c.Param("namespace")
+
+	if tenant == "" || namespace == "" {
+		c.JSON(http.StatusBadRequest, ErrorResponse{
+			Success: false,
+			Error:   "tenant and namespace parameters are required",
+			Code:    http.StatusBadRequest,
+		})
+		return
+	}
+
+	var req NamespaceScheduleRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{
+			Success: false,
+			Error:   err.Error(),
+			Code:    http.StatusBadRequest,
+		})
+		return
+	}
+
+	// Override tenant and namespace from path (more secure)
+	req.Tenant = tenant
+	req.Namespace = namespace
+
+	if err := s.scheduleService.CreateNamespaceSchedule(c.Request.Context(), req); err != nil {
+		s.logger.Error(err, "failed to create namespace schedule", "tenant", tenant, "namespace", namespace)
+		handleKubernetesError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusCreated, APIResponse{
+		Success: true,
+		Message: fmt.Sprintf("Schedule created successfully for namespace %s-%s", tenant, namespace),
+	})
+}
+
+// handleUpdateNamespaceSchedule updates a schedule for a specific namespace
+// @Summary Update namespace schedule
+// @Description Updates SleepInfo configurations for a specific namespace
+// @Tags Schedules
+// @Accept json
+// @Produce json
+// @Param tenant path string true "Tenant name" example:"bdadevdat"
+// @Param namespace path string true "Namespace suffix" example:"datastores"
+// @Param request body NamespaceScheduleRequest true "Schedule configuration"
+// @Success 200 {object} APIResponse "Schedule updated successfully"
+// @Failure 400 {object} ErrorResponse "Invalid request parameters"
+// @Failure 404 {object} ErrorResponse "Schedule not found"
+// @Failure 500 {object} ErrorResponse "Internal server error"
+// @Router /api/v1/schedules/{tenant}/{namespace} [put]
+func (s *Server) handleUpdateNamespaceSchedule(c *gin.Context) {
+	tenant := c.Param("tenant")
+	namespace := c.Param("namespace")
+
+	if tenant == "" || namespace == "" {
+		c.JSON(http.StatusBadRequest, ErrorResponse{
+			Success: false,
+			Error:   "tenant and namespace parameters are required",
+			Code:    http.StatusBadRequest,
+		})
+		return
+	}
+
+	var req NamespaceScheduleRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{
+			Success: false,
+			Error:   err.Error(),
+			Code:    http.StatusBadRequest,
+		})
+		return
+	}
+
+	// Override tenant and namespace from path (more secure)
+	req.Tenant = tenant
+	req.Namespace = namespace
+
+	if err := s.scheduleService.UpdateNamespaceSchedule(c.Request.Context(), req); err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			c.JSON(http.StatusNotFound, ErrorResponse{
+				Success: false,
+				Error:   err.Error(),
+				Code:    http.StatusNotFound,
+			})
+			return
+		}
+		s.logger.Error(err, "failed to update namespace schedule", "tenant", tenant, "namespace", namespace)
+		handleKubernetesError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, APIResponse{
+		Success: true,
+		Message: fmt.Sprintf("Schedule updated successfully for namespace %s-%s", tenant, namespace),
+	})
+}
+
+// handleDeleteNamespaceSchedule deletes a schedule for a specific namespace
+// @Summary Delete namespace schedule
+// @Description Deletes all SleepInfo configurations for a specific namespace
+// @Tags Schedules
+// @Accept json
+// @Produce json
+// @Param tenant path string true "Tenant name" example:"bdadevdat"
+// @Param namespace path string true "Namespace suffix" example:"datastores"
+// @Success 200 {object} APIResponse "Schedule deleted successfully"
+// @Failure 404 {object} ErrorResponse "Schedule not found"
+// @Failure 500 {object} ErrorResponse "Internal server error"
+// @Router /api/v1/schedules/{tenant}/{namespace} [delete]
+func (s *Server) handleDeleteNamespaceSchedule(c *gin.Context) {
+	tenant := c.Param("tenant")
+	namespace := c.Param("namespace")
+
+	if tenant == "" || namespace == "" {
+		c.JSON(http.StatusBadRequest, ErrorResponse{
+			Success: false,
+			Error:   "tenant and namespace parameters are required",
+			Code:    http.StatusBadRequest,
+		})
+		return
+	}
+
+	if err := s.scheduleService.DeleteNamespaceSchedule(c.Request.Context(), tenant, namespace); err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			c.JSON(http.StatusNotFound, ErrorResponse{
+				Success: false,
+				Error:   err.Error(),
+				Code:    http.StatusNotFound,
+			})
+			return
+		}
+		s.logger.Error(err, "failed to delete namespace schedule", "tenant", tenant, "namespace", namespace)
+		handleKubernetesError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, APIResponse{
+		Success: true,
+		Message: fmt.Sprintf("Schedule deleted successfully for namespace %s-%s", tenant, namespace),
 	})
 }
 
