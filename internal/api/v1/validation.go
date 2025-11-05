@@ -141,3 +141,55 @@ func ValidateUpdateSchedule(req UpdateScheduleRequest) error {
 
 	return nil
 }
+
+// ValidateNamespaceSchedule validates a NamespaceScheduleRequest
+func ValidateNamespaceSchedule(req NamespaceScheduleRequest) error {
+	if req.Tenant == "" {
+		return fmt.Errorf("tenant is required")
+	}
+
+	if req.Namespace == "" {
+		return fmt.Errorf("namespace is required")
+	}
+
+	if req.Off == "" {
+		return fmt.Errorf("off time is required")
+	}
+
+	if !timePattern.MatchString(req.Off) {
+		return fmt.Errorf("off time must be in HH:MM format (24-hour), got: %s", req.Off)
+	}
+
+	if req.On == "" {
+		return fmt.Errorf("on time is required")
+	}
+
+	if !timePattern.MatchString(req.On) {
+		return fmt.Errorf("on time must be in HH:MM format (24-hour), got: %s", req.On)
+	}
+
+	// Validate scheduleName if provided (must be valid Kubernetes resource name)
+	if req.ScheduleName != "" {
+		if len(req.ScheduleName) > 253 {
+			return fmt.Errorf("scheduleName must be 253 characters or less")
+		}
+		if !scheduleNamePattern.MatchString(req.ScheduleName) {
+			return fmt.Errorf("scheduleName must be a valid Kubernetes resource name (lowercase alphanumeric, hyphens, and dots allowed): %s", req.ScheduleName)
+		}
+	}
+
+	// Validate weekdays if provided
+	if req.WeekdaysSleep != "" {
+		if _, err := HumanWeekdaysToKube(req.WeekdaysSleep); err != nil {
+			return fmt.Errorf("invalid weekdaysSleep: %w", err)
+		}
+	}
+
+	if req.WeekdaysWake != "" {
+		if _, err := HumanWeekdaysToKube(req.WeekdaysWake); err != nil {
+			return fmt.Errorf("invalid weekdaysWake: %w", err)
+		}
+	}
+
+	return nil
+}
