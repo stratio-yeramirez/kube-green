@@ -967,14 +967,23 @@ func (s *ScheduleService) createOrUpdateSecretForSleepInfo(ctx context.Context, 
 	// If secret exists, preserve existing original-resource-info if present
 	if secretExists {
 		secret.ResourceVersion = existingSecret.ResourceVersion
+		// CRITICAL: Preserve existing original-resource-info - this contains deployment/statefulset state
+		// that the controller saved during sleep operation. We should NEVER overwrite this.
 		if originalData, ok := existingSecret.Data["original-resource-info"]; ok {
 			secret.Data["original-resource-info"] = originalData
+		}
+		// Also preserve any other existing data fields
+		for key, value := range existingSecret.Data {
+			if key != "original-resource-info" && key != "scheduled-at" && key != "operation-type" {
+				secret.Data[key] = value
+			}
 		}
 		// Update the secret
 		return s.client.Update(ctx, secret)
 	}
 
 	// Create new secret
+	// NOTE: original-resource-info will be added by the controller when it executes sleep operation
 	return s.client.Create(ctx, secret)
 }
 
