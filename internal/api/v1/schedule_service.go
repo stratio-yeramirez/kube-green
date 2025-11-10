@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	kubegreenv1alpha1 "github.com/kube-green/kube-green/api/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
@@ -855,21 +856,107 @@ func (s *ScheduleService) validateScheduleNameUniqueness(ctx context.Context, na
 	return nil
 }
 
-// createOrUpdateSleepInfo creates or updates a SleepInfo
+// createOrUpdateSleepInfo creates or updates a SleepInfo and its associated secret
 func (s *ScheduleService) createOrUpdateSleepInfo(ctx context.Context, sleepInfo *kubegreenv1alpha1.SleepInfo) error {
 	var existing kubegreenv1alpha1.SleepInfo
 	err := s.client.Get(ctx, client.ObjectKeyFromObject(sleepInfo), &existing)
 	if err != nil {
 		if client.IgnoreNotFound(err) == nil {
 			// Not found, create
-			return s.client.Create(ctx, sleepInfo)
+			if err := s.client.Create(ctx, sleepInfo); err != nil {
+				return err
+			}
+			// Get the created SleepInfo to obtain its UID
+			var created kubegreenv1alpha1.SleepInfo
+			if err := s.client.Get(ctx, client.ObjectKeyFromObject(sleepInfo), &created); err != nil {
+				s.logger.Error(err, "failed to get created SleepInfo for UID", "name", sleepInfo.Name, "namespace", sleepInfo.Namespace)
+				// Continue without creating secret - controller will create it
+			} else {
+				// Create associated secret after SleepInfo is created (so we have the UID)
+				if err := s.createOrUpdateSecretForSleepInfo(ctx, &created); err != nil {
+					s.logger.Error(err, "failed to create secret for SleepInfo", "name", sleepInfo.Name, "namespace", sleepInfo.Namespace)
+					// Don't fail the entire operation if secret creation fails - controller will create it
+				}
+			}
+			return nil
 		}
 		return err
 	}
 
 	// Exists, update
 	sleepInfo.ResourceVersion = existing.ResourceVersion
-	return s.client.Update(ctx, sleepInfo)
+	if err := s.client.Update(ctx, sleepInfo); err != nil {
+		return err
+	}
+	// Update associated secret
+	if err := s.createOrUpdateSecretForSleepInfo(ctx, sleepInfo); err != nil {
+		s.logger.Error(err, "failed to update secret for SleepInfo", "name", sleepInfo.Name, "namespace", sleepInfo.Namespace)
+		// Don't fail the entire operation if secret update fails - controller will update it
+	}
+	return nil
+}
+
+// createOrUpdateSecretForSleepInfo creates or updates the secret associated with a SleepInfo
+func (s *ScheduleService) createOrUpdateSecretForSleepInfo(ctx context.Context, sleepInfo *kubegreenv1alpha1.SleepInfo) error {
+	secretName := fmt.Sprintf("sleepinfo-%s", sleepInfo.Name)
+	
+	// Determine operation type based on SleepInfo annotations or spec
+	operationType := "sleep"
+	if role, ok := sleepInfo.Annotations["kube-green.stratio.com/pair-role"]; ok && role == "wake" {
+		operationType = "wake"
+	} else if sleepInfo.Spec.WakeUpTime != "" && sleepInfo.Spec.SleepTime == "" {
+		// If only WakeUpTime is set, it's a wake operation
+		operationType = "wake"
+	}
+
+	// Get current time for scheduled-at (use time.Now() for RFC3339 format)
+	now := time.Now()
+
+	// Check if secret already exists
+	var existingSecret v1.Secret
+	secretKey := client.ObjectKey{
+		Name:      secretName,
+		Namespace: sleepInfo.Namespace,
+	}
+	err := s.client.Get(ctx, secretKey, &existingSecret)
+	secretExists := err == nil
+
+	// Build secret
+	secret := &v1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName,
+			Namespace: sleepInfo.Namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "kube-green",
+			},
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: kubegreenv1alpha1.GroupVersion.String(),
+					Kind:       "SleepInfo",
+					Name:       sleepInfo.Name,
+					UID:        sleepInfo.UID,
+				},
+			},
+		},
+		StringData: map[string]string{
+			"scheduled-at":   now.Format(time.RFC3339), // RFC3339 format
+			"operation-type": operationType,
+		},
+		Data: make(map[string][]byte),
+	}
+
+	// If secret exists, preserve existing original-resource-info if present
+	if secretExists {
+		secret.ResourceVersion = existingSecret.ResourceVersion
+		if originalData, ok := existingSecret.Data["original-resource-info"]; ok {
+			secret.Data["original-resource-info"] = originalData
+		}
+		// Update the secret
+		return s.client.Update(ctx, secret)
+	}
+
+	// Create new secret
+	return s.client.Create(ctx, secret)
 }
 
 // ScheduleResponse represents a schedule for a tenant
@@ -1273,7 +1360,7 @@ func (s *ScheduleService) UpdateSchedule(ctx context.Context, tenant string, req
 								break
 							}
 						}
-						
+
 						// Si no se encuentra schedule sleep separado, buscar en el schedule único
 						if sleepSchedule == nil {
 							// Buscar schedule con sleepTime o que tenga ambos sleepTime y wakeUpAt
@@ -1293,12 +1380,12 @@ func (s *ScheduleService) UpdateSchedule(ctx context.Context, tenant string, req
 								}
 							}
 						}
-						
+
 						// Si aún no se encuentra, usar el primero como fallback
 						if sleepSchedule == nil {
 							sleepSchedule = &nsInfo.Schedule[0]
 						}
-						
+
 						// Extraer tiempo de sleep
 						sleepTimeUTC := ""
 						if sleepSchedule.Role == "sleep" {
@@ -1311,7 +1398,7 @@ func (s *ScheduleService) UpdateSchedule(ctx context.Context, tenant string, req
 							// Fallback: usar Time
 							sleepTimeUTC = sleepSchedule.Time
 						}
-						
+
 						if sleepTimeUTC != "" {
 							offConv, err := FromClusterToUserTimezone(sleepTimeUTC, clusterTZ, userTZ)
 							if err == nil {
@@ -1324,7 +1411,7 @@ func (s *ScheduleService) UpdateSchedule(ctx context.Context, tenant string, req
 							}
 						}
 					}
-					
+
 					// Buscar schedule wake específicamente para obtener el tiempo de wake
 					if req.On == "" {
 						var wakeSchedule *SleepInfoSummary
@@ -1334,7 +1421,7 @@ func (s *ScheduleService) UpdateSchedule(ctx context.Context, tenant string, req
 								break
 							}
 						}
-						
+
 						// Si no se encuentra schedule wake separado, buscar en el schedule único
 						if wakeSchedule == nil {
 							// Buscar schedule con wakeTime
@@ -1347,7 +1434,7 @@ func (s *ScheduleService) UpdateSchedule(ctx context.Context, tenant string, req
 								}
 							}
 						}
-						
+
 						// Extraer tiempo de wake
 						wakeTimeUTC := ""
 						if wakeSchedule != nil {
@@ -1359,7 +1446,7 @@ func (s *ScheduleService) UpdateSchedule(ctx context.Context, tenant string, req
 								wakeTimeUTC = wakeSchedule.WakeTime
 							}
 						}
-						
+
 						if wakeTimeUTC != "" {
 							onConv, err := FromClusterToUserTimezone(wakeTimeUTC, clusterTZ, userTZ)
 							if err == nil {
