@@ -866,17 +866,32 @@ func (s *ScheduleService) createOrUpdateSleepInfo(ctx context.Context, sleepInfo
 			if err := s.client.Create(ctx, sleepInfo); err != nil {
 				return err
 			}
-			// Get the created SleepInfo to obtain its UID
-			var created kubegreenv1alpha1.SleepInfo
-			if err := s.client.Get(ctx, client.ObjectKeyFromObject(sleepInfo), &created); err != nil {
-				s.logger.Error(err, "failed to get created SleepInfo for UID", "name", sleepInfo.Name, "namespace", sleepInfo.Namespace)
-				// Continue without creating secret - controller will create it
-			} else {
-				// Create associated secret after SleepInfo is created (so we have the UID)
-				if err := s.createOrUpdateSecretForSleepInfo(ctx, &created); err != nil {
-					s.logger.Error(err, "failed to create secret for SleepInfo", "name", sleepInfo.Name, "namespace", sleepInfo.Namespace)
-					// Don't fail the entire operation if secret creation fails - controller will create it
+			// After Create(), the sleepInfo object should have the UID populated by the Kubernetes API
+			// However, if it's not available, try to get it with a retry
+			if sleepInfo.UID == "" {
+				// Retry getting the created SleepInfo to obtain its UID
+				var created kubegreenv1alpha1.SleepInfo
+				maxRetries := 3
+				for i := 0; i < maxRetries; i++ {
+					if err := s.client.Get(ctx, client.ObjectKeyFromObject(sleepInfo), &created); err == nil {
+						sleepInfo.UID = created.UID
+						break
+					}
+					if i < maxRetries-1 {
+						// Wait a bit before retrying (exponential backoff: 10ms, 20ms, 40ms)
+						time.Sleep(time.Duration(10*(1<<uint(i))) * time.Millisecond)
+					}
 				}
+				if sleepInfo.UID == "" {
+					s.logger.Error(fmt.Errorf("failed to get UID after %d retries", maxRetries), "failed to get created SleepInfo for UID", "name", sleepInfo.Name, "namespace", sleepInfo.Namespace)
+					// Continue without creating secret - controller will create it
+					return nil
+				}
+			}
+			// Create associated secret after SleepInfo is created (now we have the UID)
+			if err := s.createOrUpdateSecretForSleepInfo(ctx, sleepInfo); err != nil {
+				s.logger.Error(err, "failed to create secret for SleepInfo", "name", sleepInfo.Name, "namespace", sleepInfo.Namespace)
+				// Don't fail the entire operation if secret creation fails - controller will create it
 			}
 			return nil
 		}
@@ -899,7 +914,7 @@ func (s *ScheduleService) createOrUpdateSleepInfo(ctx context.Context, sleepInfo
 // createOrUpdateSecretForSleepInfo creates or updates the secret associated with a SleepInfo
 func (s *ScheduleService) createOrUpdateSecretForSleepInfo(ctx context.Context, sleepInfo *kubegreenv1alpha1.SleepInfo) error {
 	secretName := fmt.Sprintf("sleepinfo-%s", sleepInfo.Name)
-	
+
 	// Determine operation type based on SleepInfo annotations or spec
 	operationType := "sleep"
 	if role, ok := sleepInfo.Annotations["kube-green.stratio.com/pair-role"]; ok && role == "wake" {
@@ -929,20 +944,24 @@ func (s *ScheduleService) createOrUpdateSecretForSleepInfo(ctx context.Context, 
 			Labels: map[string]string{
 				"app.kubernetes.io/managed-by": "kube-green",
 			},
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					APIVersion: kubegreenv1alpha1.GroupVersion.String(),
-					Kind:       "SleepInfo",
-					Name:       sleepInfo.Name,
-					UID:        sleepInfo.UID,
-				},
-			},
 		},
 		StringData: map[string]string{
 			"scheduled-at":   now.Format(time.RFC3339), // RFC3339 format
 			"operation-type": operationType,
 		},
 		Data: make(map[string][]byte),
+	}
+
+	// Add OwnerReference only if UID is available
+	if sleepInfo.UID != "" {
+		secret.OwnerReferences = []metav1.OwnerReference{
+			{
+				APIVersion: kubegreenv1alpha1.GroupVersion.String(),
+				Kind:       "SleepInfo",
+				Name:       sleepInfo.Name,
+				UID:        sleepInfo.UID,
+			},
+		}
 	}
 
 	// If secret exists, preserve existing original-resource-info if present
