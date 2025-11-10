@@ -48,24 +48,17 @@ func ValidateCreateSchedule(req CreateScheduleRequest) error {
 		}
 	}
 
-	// Validate weekdays if provided
-	if req.Weekdays != "" {
-		if _, err := HumanWeekdaysToKube(req.Weekdays); err != nil {
-			return fmt.Errorf("invalid weekdays: %w", err)
+	// Validate weekdaysSleep if provided
+	if req.WeekdaysSleep != "" {
+		if _, err := HumanWeekdaysToKube(req.WeekdaysSleep); err != nil {
+			return fmt.Errorf("invalid weekdaysSleep: %w", err)
 		}
 	}
 
-	// Validate sleepDays if provided
-	if req.SleepDays != "" {
-		if _, err := HumanWeekdaysToKube(req.SleepDays); err != nil {
-			return fmt.Errorf("invalid sleepDays: %w", err)
-		}
-	}
-
-	// Validate wakeDays if provided
-	if req.WakeDays != "" {
-		if _, err := HumanWeekdaysToKube(req.WakeDays); err != nil {
-			return fmt.Errorf("invalid wakeDays: %w", err)
+	// Validate weekdaysWake if provided
+	if req.WeekdaysWake != "" {
+		if _, err := HumanWeekdaysToKube(req.WeekdaysWake); err != nil {
+			return fmt.Errorf("invalid weekdaysWake: %w", err)
 		}
 	}
 
@@ -90,7 +83,7 @@ func ValidateCreateSchedule(req CreateScheduleRequest) error {
 // ValidateUpdateSchedule validates an UpdateScheduleRequest
 func ValidateUpdateSchedule(req UpdateScheduleRequest) error {
 	// At least one field must be provided
-	if req.Off == "" && req.On == "" && req.Weekdays == "" && req.SleepDays == "" && req.WakeDays == "" && len(req.Namespaces) == 0 {
+	if req.Off == "" && req.On == "" && req.WeekdaysSleep == "" && req.WeekdaysWake == "" && len(req.Namespaces) == 0 {
 		return fmt.Errorf("at least one field must be provided for update")
 	}
 
@@ -103,24 +96,17 @@ func ValidateUpdateSchedule(req UpdateScheduleRequest) error {
 		return fmt.Errorf("on time must be in HH:MM format (24-hour), got: %s", req.On)
 	}
 
-	// Validate weekdays if provided
-	if req.Weekdays != "" {
-		if _, err := HumanWeekdaysToKube(req.Weekdays); err != nil {
-			return fmt.Errorf("invalid weekdays: %w", err)
+	// Validate weekdaysSleep if provided
+	if req.WeekdaysSleep != "" {
+		if _, err := HumanWeekdaysToKube(req.WeekdaysSleep); err != nil {
+			return fmt.Errorf("invalid weekdaysSleep: %w", err)
 		}
 	}
 
-	// Validate sleepDays if provided
-	if req.SleepDays != "" {
-		if _, err := HumanWeekdaysToKube(req.SleepDays); err != nil {
-			return fmt.Errorf("invalid sleepDays: %w", err)
-		}
-	}
-
-	// Validate wakeDays if provided
-	if req.WakeDays != "" {
-		if _, err := HumanWeekdaysToKube(req.WakeDays); err != nil {
-			return fmt.Errorf("invalid wakeDays: %w", err)
+	// Validate weekdaysWake if provided
+	if req.WeekdaysWake != "" {
+		if _, err := HumanWeekdaysToKube(req.WeekdaysWake); err != nil {
+			return fmt.Errorf("invalid weekdaysWake: %w", err)
 		}
 	}
 

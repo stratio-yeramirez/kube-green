@@ -201,9 +201,8 @@ type CreateScheduleRequest struct {
 	ClusterTimezone string       `json:"clusterTimezone,omitempty" example:"UTC"`                        // Cluster timezone (default: UTC)
 	Off             string       `json:"off" binding:"required" example:"22:00"`                         // Sleep time in user timezone (HH:MM format, 24-hour)
 	On              string       `json:"on" binding:"required" example:"06:00"`                          // Wake time in user timezone (HH:MM format, 24-hour)
-	Weekdays        string       `json:"weekdays,omitempty" example:"lunes-viernes"`                     // Days of week (human format: "lunes-viernes", or numeric: "1-5")
-	SleepDays       string       `json:"sleepDays,omitempty" example:"viernes"`                          // Optional: specific days for sleep (overrides weekdays)
-	WakeDays        string       `json:"wakeDays,omitempty" example:"lunes"`                             // Optional: specific days for wake (overrides weekdays)
+	WeekdaysSleep   string       `json:"weekdaysSleep" example:"0-6"`                                    // Sleep weekdays (0=Sunday, 6=Saturday, can be range like "0-6" or comma-separated like "1,3,5")
+	WeekdaysWake    string       `json:"weekdaysWake,omitempty" example:"0-6"`                           // Wake weekdays (defaults to weekdaysSleep if not provided)
 	Namespaces      []string     `json:"namespaces,omitempty" example:"datastores,apps"`                 // Optional: limit to specific namespaces (datastores, apps, rocket, intelligence, airflowsso)
 	Delays          *DelayConfig `json:"delays,omitempty"`                                               // Optional: configurable delays for each resource type
 	Exclusions      []Exclusion  `json:"exclusions,omitempty"`                                           // Optional: resource exclusions by annotations/labels
@@ -213,18 +212,18 @@ type CreateScheduleRequest struct {
 // NamespaceScheduleRequest represents a request to create/update a schedule for a single namespace
 // @Description Request to create or update a sleep/wake schedule for a specific namespace
 type NamespaceScheduleRequest struct {
-	Tenant          string           `json:"tenant" binding:"required" example:"bdadevdat"`                // Tenant name
-	Namespace       string           `json:"namespace" binding:"required" example:"datastores"`          // Namespace suffix (datastores, apps, etc.)
-	ScheduleName    string           `json:"scheduleName,omitempty" example:"schedule-production"`       // Optional: Custom name for the schedule (must be unique per tenant/namespace)
+	Tenant          string           `json:"tenant" binding:"required" example:"bdadevdat"`                  // Tenant name
+	Namespace       string           `json:"namespace" binding:"required" example:"datastores"`              // Namespace suffix (datastores, apps, etc.)
+	ScheduleName    string           `json:"scheduleName,omitempty" example:"schedule-production"`           // Optional: Custom name for the schedule (must be unique per tenant/namespace)
 	Description     string           `json:"description,omitempty" example:"Horario de producción nocturno"` // Optional: Short description of the schedule
-	UserTimezone    string           `json:"userTimezone,omitempty" example:"America/Bogota"`            // User timezone (default: America/Bogota)
-	ClusterTimezone string           `json:"clusterTimezone,omitempty" example:"UTC"`                   // Cluster timezone (default: UTC)
-	Off             string           `json:"off" binding:"required" example:"21:30"`                     // Sleep time in user timezone (HH:MM format)
-	On              string           `json:"on" binding:"required" example:"06:00"`                      // Wake time in user timezone (HH:MM format)
-	WeekdaysSleep   string           `json:"weekdaysSleep" example:"0-6"`                                 // Sleep weekdays (0=Sunday, 6=Saturday, can be range like "0-6" or comma-separated like "1,3,5")
-	WeekdaysWake    string           `json:"weekdaysWake,omitempty" example:"0-6"`                       // Wake weekdays (defaults to weekdaysSleep if not provided)
-	Delays          *WakeDelayConfig `json:"delays,omitempty"`                                           // Optional: Staggered wake-up delays
-	Exclusions      []Exclusion      `json:"exclusions,omitempty"`                                       // Optional: Custom exclusions
+	UserTimezone    string           `json:"userTimezone,omitempty" example:"America/Bogota"`                // User timezone (default: America/Bogota)
+	ClusterTimezone string           `json:"clusterTimezone,omitempty" example:"UTC"`                        // Cluster timezone (default: UTC)
+	Off             string           `json:"off" binding:"required" example:"21:30"`                         // Sleep time in user timezone (HH:MM format)
+	On              string           `json:"on" binding:"required" example:"06:00"`                          // Wake time in user timezone (HH:MM format)
+	WeekdaysSleep   string           `json:"weekdaysSleep" example:"0-6"`                                    // Sleep weekdays (0=Sunday, 6=Saturday, can be range like "0-6" or comma-separated like "1,3,5")
+	WeekdaysWake    string           `json:"weekdaysWake,omitempty" example:"0-6"`                           // Wake weekdays (defaults to weekdaysSleep if not provided)
+	Delays          *WakeDelayConfig `json:"delays,omitempty"`                                               // Optional: Staggered wake-up delays
+	Exclusions      []Exclusion      `json:"exclusions,omitempty"`                                           // Optional: Custom exclusions
 }
 
 // handleCreateSchedule creates a new schedule
@@ -261,13 +260,18 @@ func (s *Server) handleCreateSchedule(c *gin.Context) {
 
 	// Create schedule using service
 	serviceReq := CreateScheduleRequest{
-		Tenant:     req.Tenant,
-		Off:        req.Off,
-		On:         req.On,
-		Weekdays:   req.Weekdays,
-		SleepDays:  req.SleepDays,
-		WakeDays:   req.WakeDays,
-		Namespaces: req.Namespaces,
+		Tenant:          req.Tenant,
+		ScheduleName:    req.ScheduleName,
+		Description:     req.Description,
+		UserTimezone:    req.UserTimezone,
+		ClusterTimezone: req.ClusterTimezone,
+		Off:             req.Off,
+		On:              req.On,
+		WeekdaysSleep:   req.WeekdaysSleep,
+		WeekdaysWake:    req.WeekdaysWake,
+		Namespaces:      req.Namespaces,
+		Delays:          req.Delays,
+		Exclusions:      req.Exclusions,
 	}
 
 	if err := s.scheduleService.CreateSchedule(c.Request.Context(), serviceReq); err != nil {
@@ -289,13 +293,14 @@ func (s *Server) handleCreateSchedule(c *gin.Context) {
 // UpdateScheduleRequest represents a request to update a schedule
 // @Description Request to update an existing sleep/wake schedule for a tenant (all fields optional)
 type UpdateScheduleRequest struct {
-	Off        string   `json:"off,omitempty" example:"23:00"`         // Sleep time in local timezone (HH:MM format, 24-hour)
-	On         string   `json:"on,omitempty" example:"07:00"`          // Wake time in local timezone (HH:MM format, 24-hour)
-	Weekdays   string   `json:"weekdays,omitempty" example:"1-5"`      // Days of week (human format: "lunes-viernes", or numeric: "1-5")
-	SleepDays  string   `json:"sleepDays,omitempty" example:"viernes"` // Optional: specific days for sleep (overrides weekdays)
-	WakeDays   string   `json:"wakeDays,omitempty" example:"lunes"`    // Optional: specific days for wake (overrides weekdays)
-	Namespaces []string `json:"namespaces,omitempty" example:"apps"`   // Optional: limit to specific namespaces
-	Apply      bool     `json:"apply,omitempty"`                       // Always applies to cluster (field is ignored)
+	UserTimezone    string   `json:"userTimezone,omitempty" example:"America/Bogota"` // User timezone (default: America/Bogota)
+	ClusterTimezone string   `json:"clusterTimezone,omitempty" example:"UTC"`         // Cluster timezone (default: UTC)
+	Off             string   `json:"off,omitempty" example:"23:00"`                   // Sleep time in local timezone (HH:MM format, 24-hour)
+	On              string   `json:"on,omitempty" example:"07:00"`                    // Wake time in local timezone (HH:MM format, 24-hour)
+	WeekdaysSleep   string   `json:"weekdaysSleep,omitempty" example:"0-6"`           // Sleep weekdays (0=Sunday, 6=Saturday)
+	WeekdaysWake    string   `json:"weekdaysWake,omitempty" example:"0-6"`            // Wake weekdays (0=Sunday, 6=Saturday)
+	Namespaces      []string `json:"namespaces,omitempty" example:"apps"`             // Optional: limit to specific namespaces
+	Apply           bool     `json:"apply,omitempty"`                                 // Always applies to cluster (field is ignored)
 }
 
 // handleUpdateSchedule updates an existing schedule
@@ -313,6 +318,7 @@ type UpdateScheduleRequest struct {
 // @Failure 500 {object} ErrorResponse "Internal server error"
 // @Router /api/v1/schedules/{tenant} [put]
 func (s *Server) handleUpdateSchedule(c *gin.Context) {
+	s.logger.Info("handleUpdateSchedule: START", "method", c.Request.Method, "path", c.Request.URL.Path)
 	tenant := c.Param("tenant")
 	if tenant == "" {
 		c.JSON(http.StatusBadRequest, ErrorResponse{
@@ -322,6 +328,7 @@ func (s *Server) handleUpdateSchedule(c *gin.Context) {
 		})
 		return
 	}
+	s.logger.Info("handleUpdateSchedule: tenant extracted", "tenant", tenant)
 
 	// Get optional namespace filter from query parameter
 	namespaceFilter := c.Query("namespace")
@@ -349,26 +356,22 @@ func (s *Server) handleUpdateSchedule(c *gin.Context) {
 		return
 	}
 
-	// Convert UpdateScheduleRequest to CreateScheduleRequest
-	createReq := CreateScheduleRequest{
-		Tenant:     tenant,
-		Off:        req.Off,
-		On:         req.On,
-		Weekdays:   req.Weekdays,
-		SleepDays:  req.SleepDays,
-		WakeDays:   req.WakeDays,
-		Namespaces: req.Namespaces,
-	}
-
-	// If namespace filter is provided, override namespaces in request
-	if namespaceFilter != "" {
-		createReq.Namespaces = []string{namespaceFilter}
-	}
-
-	// Verify schedule exists before updating
-	_, err := s.scheduleService.GetSchedule(c.Request.Context(), tenant, namespaceFilter)
-	if err != nil {
-		if strings.Contains(err.Error(), "no schedules found") {
+	// Get existing schedule to extract missing fields (timezones, delays, exclusions, etc.)
+	existing, err := s.scheduleService.GetSchedule(c.Request.Context(), tenant, namespaceFilter)
+	var userTZ, clusterTZ string
+	if err == nil && existing != nil {
+		// Extract timezone from existing schedule
+		for _, nsInfo := range existing.Namespaces {
+			if len(nsInfo.Schedule) > 0 {
+				first := nsInfo.Schedule[0]
+				if first.TimeZone != "" {
+					clusterTZ = first.TimeZone
+				}
+				break
+			}
+		}
+	} else {
+		if err != nil && strings.Contains(err.Error(), "no schedules found") {
 			c.JSON(http.StatusNotFound, ErrorResponse{
 				Success: false,
 				Error:   fmt.Sprintf("schedule not found for tenant: %s", tenant),
@@ -376,9 +379,41 @@ func (s *Server) handleUpdateSchedule(c *gin.Context) {
 			})
 			return
 		}
-		s.logger.Error(err, "failed to get existing schedule", "tenant", tenant, "namespace", namespaceFilter)
-		handleKubernetesError(c, err)
-		return
+		if err != nil {
+			s.logger.Error(err, "failed to get existing schedule", "tenant", tenant, "namespace", namespaceFilter)
+			handleKubernetesError(c, err)
+			return
+		}
+	}
+
+	// Use timezones from request if provided, otherwise from existing schedule, otherwise defaults
+	if req.UserTimezone != "" {
+		userTZ = req.UserTimezone
+	} else if userTZ == "" {
+		userTZ = "America/Bogota"
+	}
+	if req.ClusterTimezone != "" {
+		clusterTZ = req.ClusterTimezone
+	} else if clusterTZ == "" {
+		clusterTZ = "UTC"
+	}
+
+	// Convert UpdateScheduleRequest to CreateScheduleRequest
+	// IMPORTANTE: Incluir todos los campos necesarios, incluyendo timezones del request o extraídos
+	createReq := CreateScheduleRequest{
+		Tenant:          tenant,
+		Off:             req.Off,
+		On:              req.On,
+		WeekdaysSleep:   req.WeekdaysSleep,
+		WeekdaysWake:    req.WeekdaysWake,
+		Namespaces:      req.Namespaces,
+		UserTimezone:    userTZ,
+		ClusterTimezone: clusterTZ,
+	}
+
+	// If namespace filter is provided, override namespaces in request
+	if namespaceFilter != "" {
+		createReq.Namespaces = []string{namespaceFilter}
 	}
 
 	// Validate that at least off and on are provided (required for timezone conversion)
@@ -392,11 +427,13 @@ func (s *Server) handleUpdateSchedule(c *gin.Context) {
 	}
 
 	// Update schedule
+	s.logger.Info("handleUpdateSchedule: calling UpdateSchedule", "tenant", tenant, "namespace", namespaceFilter, "createReq", fmt.Sprintf("%+v", createReq))
 	if err := s.scheduleService.UpdateSchedule(c.Request.Context(), tenant, createReq, namespaceFilter); err != nil {
 		s.logger.Error(err, "failed to update schedule", "tenant", tenant, "namespace", namespaceFilter)
 		handleKubernetesError(c, err)
 		return
 	}
+	s.logger.Info("handleUpdateSchedule: UpdateSchedule completed successfully", "tenant", tenant, "namespace", namespaceFilter)
 
 	message := fmt.Sprintf("Schedule updated successfully for tenant %s", tenant)
 	if namespaceFilter != "" {
