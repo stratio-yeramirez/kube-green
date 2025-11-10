@@ -1255,7 +1255,7 @@ func (s *ScheduleService) UpdateSchedule(ctx context.Context, tenant string, req
 			}
 
 			// Extract values from existing schedule
-			// Note: This is a simplified extraction - we take the first namespace schedule we find
+			// IMPORTANTE: Buscar específicamente schedules sleep y wake, no usar el primero
 			for _, nsInfo := range existing.Namespaces {
 				if len(nsInfo.Schedule) > 0 {
 					first := nsInfo.Schedule[0]
@@ -1264,47 +1264,111 @@ func (s *ScheduleService) UpdateSchedule(ctx context.Context, tenant string, req
 						clusterTZ = first.TimeZone
 					}
 
+					// Buscar schedule sleep específicamente para obtener el tiempo de sleep
 					if req.Off == "" {
-						// Los tiempos vienen en UTC del schedule existente
-						// Necesitamos convertirlos de vuelta a la timezone del usuario
-						if first.Time != "" {
-							offConv, err := FromClusterToUserTimezone(first.Time, clusterTZ, userTZ)
+						var sleepSchedule *SleepInfoSummary
+						for i := range nsInfo.Schedule {
+							if nsInfo.Schedule[i].Role == "sleep" {
+								sleepSchedule = &nsInfo.Schedule[i]
+								break
+							}
+						}
+						
+						// Si no se encuentra schedule sleep separado, buscar en el schedule único
+						if sleepSchedule == nil {
+							// Buscar schedule con sleepTime o que tenga ambos sleepTime y wakeUpAt
+							for i := range nsInfo.Schedule {
+								sched := &nsInfo.Schedule[i]
+								if sched.Time != "" && (sched.Role == "sleep" || sched.Role == "") {
+									// Si tiene WakeTime, es un schedule único con ambos tiempos
+									if sched.WakeTime != "" {
+										// Es un schedule único, usar el Time como sleepTime
+										sleepSchedule = sched
+										break
+									} else if sched.Role == "sleep" {
+										// Es un schedule sleep separado
+										sleepSchedule = sched
+										break
+									}
+								}
+							}
+						}
+						
+						// Si aún no se encuentra, usar el primero como fallback
+						if sleepSchedule == nil {
+							sleepSchedule = &nsInfo.Schedule[0]
+						}
+						
+						// Extraer tiempo de sleep
+						sleepTimeUTC := ""
+						if sleepSchedule.Role == "sleep" {
+							// Schedule sleep separado: usar Time
+							sleepTimeUTC = sleepSchedule.Time
+						} else if sleepSchedule.WakeTime != "" {
+							// Schedule único con ambos tiempos: Time es el sleepTime
+							sleepTimeUTC = sleepSchedule.Time
+						} else {
+							// Fallback: usar Time
+							sleepTimeUTC = sleepSchedule.Time
+						}
+						
+						if sleepTimeUTC != "" {
+							offConv, err := FromClusterToUserTimezone(sleepTimeUTC, clusterTZ, userTZ)
 							if err == nil {
 								req.Off = offConv.TimeUTC
-								s.logger.Info("UpdateSchedule: converted Off time", "from_utc", first.Time, "to_user", req.Off, "clusterTZ", clusterTZ, "userTZ", userTZ)
+								s.logger.Info("UpdateSchedule: converted Off time from sleep schedule", "from_utc", sleepTimeUTC, "to_user", req.Off, "clusterTZ", clusterTZ, "userTZ", userTZ, "role", sleepSchedule.Role)
 							} else {
 								// Fallback: usar el tiempo directamente si la conversión falla
-								req.Off = first.Time
+								req.Off = sleepTimeUTC
 								s.logger.Info("UpdateSchedule: using Off time directly (conversion failed)", "time", req.Off, "error", err)
 							}
 						}
 					}
+					
+					// Buscar schedule wake específicamente para obtener el tiempo de wake
 					if req.On == "" {
-						if first.WakeTime != "" {
-							onConv, err := FromClusterToUserTimezone(first.WakeTime, clusterTZ, userTZ)
-							if err == nil {
-								req.On = onConv.TimeUTC
-								s.logger.Info("UpdateSchedule: converted On time", "from_utc", first.WakeTime, "to_user", req.On, "clusterTZ", clusterTZ, "userTZ", userTZ)
-							} else {
-								// Fallback: usar el tiempo directamente si la conversión falla
-								req.On = first.WakeTime
-								s.logger.Info("UpdateSchedule: using On time directly (conversion failed)", "time", req.On, "error", err)
+						var wakeSchedule *SleepInfoSummary
+						for i := range nsInfo.Schedule {
+							if nsInfo.Schedule[i].Role == "wake" {
+								wakeSchedule = &nsInfo.Schedule[i]
+								break
 							}
-						} else {
-							// Buscar un schedule wake para obtener el tiempo
-							for _, sched := range nsInfo.Schedule {
-								if sched.Role == "wake" {
-									onConv, err := FromClusterToUserTimezone(sched.Time, clusterTZ, userTZ)
-									if err == nil {
-										req.On = onConv.TimeUTC
-										s.logger.Info("UpdateSchedule: converted On time from wake schedule", "from_utc", sched.Time, "to_user", req.On, "clusterTZ", clusterTZ, "userTZ", userTZ)
-									} else {
-										// Fallback: usar el tiempo directamente si la conversión falla
-										req.On = sched.Time
-										s.logger.Info("UpdateSchedule: using On time directly from wake schedule (conversion failed)", "time", req.On, "error", err)
-									}
+						}
+						
+						// Si no se encuentra schedule wake separado, buscar en el schedule único
+						if wakeSchedule == nil {
+							// Buscar schedule con wakeTime
+							for i := range nsInfo.Schedule {
+								sched := &nsInfo.Schedule[i]
+								if sched.WakeTime != "" {
+									// Es un schedule único con ambos tiempos
+									wakeSchedule = sched
 									break
 								}
+							}
+						}
+						
+						// Extraer tiempo de wake
+						wakeTimeUTC := ""
+						if wakeSchedule != nil {
+							if wakeSchedule.Role == "wake" {
+								// Schedule wake separado: usar Time
+								wakeTimeUTC = wakeSchedule.Time
+							} else if wakeSchedule.WakeTime != "" {
+								// Schedule único con ambos tiempos: WakeTime es el wakeTime
+								wakeTimeUTC = wakeSchedule.WakeTime
+							}
+						}
+						
+						if wakeTimeUTC != "" {
+							onConv, err := FromClusterToUserTimezone(wakeTimeUTC, clusterTZ, userTZ)
+							if err == nil {
+								req.On = onConv.TimeUTC
+								s.logger.Info("UpdateSchedule: converted On time from wake schedule", "from_utc", wakeTimeUTC, "to_user", req.On, "clusterTZ", clusterTZ, "userTZ", userTZ, "role", wakeSchedule.Role)
+							} else {
+								// Fallback: usar el tiempo directamente si la conversión falla
+								req.On = wakeTimeUTC
+								s.logger.Info("UpdateSchedule: using On time directly (conversion failed)", "time", req.On, "error", err)
 							}
 						}
 					}
