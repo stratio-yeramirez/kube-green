@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -51,6 +52,8 @@ func NewScheduleService(c client.Client, l logger) *ScheduleService {
 
 // CreateSchedule creates SleepInfo objects for the tenant
 func (s *ScheduleService) CreateSchedule(ctx context.Context, req CreateScheduleRequest) error {
+	s.logger.Info("CreateSchedule CALLED", "tenant", req.Tenant, "off", req.Off, "on", req.On, "weekdaysSleep", req.WeekdaysSleep, "weekdaysWake", req.WeekdaysWake, "namespaces", fmt.Sprintf("%v", req.Namespaces), "userTimezone", req.UserTimezone, "clusterTimezone", req.ClusterTimezone)
+
 	// 1. Normalize weekdays
 	wdDefault := "0-6"
 	wdSleep := wdDefault
@@ -88,13 +91,17 @@ func (s *ScheduleService) CreateSchedule(ctx context.Context, req CreateSchedule
 
 	offConv, err := ToUTCHHMMWithTimezone(req.Off, userTZ, clusterTZ)
 	if err != nil {
+		s.logger.Error(err, "failed to convert off time", "off", req.Off, "userTZ", userTZ, "clusterTZ", clusterTZ)
 		return fmt.Errorf("invalid off time: %w", err)
 	}
+	s.logger.Info("Time conversion: off", "userTime", req.Off, "clusterTime", offConv.TimeUTC, "dayShift", offConv.DayShift, "userTZ", userTZ, "clusterTZ", clusterTZ)
 
 	onConv, err := ToUTCHHMMWithTimezone(req.On, userTZ, clusterTZ)
 	if err != nil {
+		s.logger.Error(err, "failed to convert on time", "on", req.On, "userTZ", userTZ, "clusterTZ", clusterTZ)
 		return fmt.Errorf("invalid on time: %w", err)
 	}
+	s.logger.Info("Time conversion: on", "userTime", req.On, "clusterTime", onConv.TimeUTC, "dayShift", onConv.DayShift, "userTZ", userTZ, "clusterTZ", clusterTZ)
 
 	// 3. Adjust weekdays for timezone shift
 	wdSleepUTC, err := ShiftWeekdaysStr(wdSleep, offConv.DayShift)
@@ -108,32 +115,27 @@ func (s *ScheduleService) CreateSchedule(ctx context.Context, req CreateSchedule
 	}
 
 	// 4. Calculate staggered wake times based on delays
+	// IMPORTANTE: Los delays por defecto SOLO se aplican para datastores (que tiene CRDs)
+	// Para namespaces simples (apps, rocket, intelligence, airflowsso), usar el tiempo convertido directamente
 	onPgHDFS := onConv.TimeUTC
 	onPgBouncer := onConv.TimeUTC
 	onDeployments := onConv.TimeUTC
 
+	// Solo aplicar delays si se especifican explícitamente en req.Delays
+	// Los delays por defecto (5m, 7m) SOLO se aplicarán en createDatastoresSleepInfos cuando sea necesario
 	if req.Delays != nil {
 		// Parse delays and apply them
 		if req.Delays.SuspendDeploymentsPgbouncer != "" {
 			pgbouncerDelay, _ := parseDelayToMinutes(req.Delays.SuspendDeploymentsPgbouncer)
 			onPgBouncer, _ = AddMinutes(onConv.TimeUTC, pgbouncerDelay)
-		} else {
-			// Default: 5 minutes
-			onPgBouncer, _ = AddMinutes(onConv.TimeUTC, 5)
 		}
 
 		if req.Delays.SuspendDeployments != "" {
 			deployDelay, _ := parseDelayToMinutes(req.Delays.SuspendDeployments)
 			onDeployments, _ = AddMinutes(onConv.TimeUTC, deployDelay)
-		} else {
-			// Default: 7 minutes
-			onDeployments, _ = AddMinutes(onConv.TimeUTC, 7)
 		}
-	} else {
-		// Default delays if not specified
-		onPgBouncer, _ = AddMinutes(onConv.TimeUTC, 5)
-		onDeployments, _ = AddMinutes(onConv.TimeUTC, 7)
 	}
+	// NO aplicar delays por defecto aquí - se aplicarán solo en createDatastoresSleepInfos si es necesario
 
 	// 5. Determine which namespaces to process
 	selectedNamespaces := normalizeNamespaces(req.Namespaces)
@@ -153,8 +155,10 @@ func (s *ScheduleService) CreateSchedule(ctx context.Context, req CreateSchedule
 
 	// 8. Create SleepInfo objects for each namespace
 	// NO iterar sobre validSuffixes hardcodeados - usar los namespaces seleccionados dinámicamente
+	s.logger.Info("CreateSchedule: processing namespaces", "count", len(selectedNamespaces), "namespaces", fmt.Sprintf("%v", selectedNamespaces))
 	for suffix := range selectedNamespaces {
 		namespace := fmt.Sprintf("%s-%s", req.Tenant, suffix)
+		s.logger.Info("CreateSchedule: processing namespace", "suffix", suffix, "namespace", namespace)
 
 		// Build excludeRef from exclusions
 		excludeRefs := getExcludeRefsForOperators()
@@ -173,37 +177,63 @@ func (s *ScheduleService) CreateSchedule(ctx context.Context, req CreateSchedule
 			// Create SleepInfos based on namespace type using new functions
 			switch suffix {
 			case "datastores":
-				if err := s.createDatastoresSleepInfosWithExclusions(ctx, req.Tenant, namespace, offConv.TimeUTC, onDeployments, onPgHDFS, onPgBouncer, wdSleepUTC, wdWakeUTC, excludeRefs, req.ScheduleName, req.Description); err != nil {
+				s.logger.Info("CreateSchedule: creating datastores SleepInfos", "namespace", namespace, "offUTC", offConv.TimeUTC, "onDeployments", onDeployments, "wdSleepUTC", wdSleepUTC, "wdWakeUTC", wdWakeUTC)
+				if err := s.createDatastoresSleepInfosWithExclusions(ctx, req.Tenant, namespace, offConv.TimeUTC, onDeployments, onPgHDFS, onPgBouncer, wdSleepUTC, wdWakeUTC, excludeRefs, req.ScheduleName, req.Description, userTZ); err != nil {
+					s.logger.Error(err, "failed to create datastores sleepinfos", "namespace", namespace)
 					return fmt.Errorf("failed to create datastores sleepinfos: %w", err)
 				}
+				s.logger.Info("CreateSchedule: datastores SleepInfos created successfully", "namespace", namespace)
 			case "apps", "rocket", "intelligence":
-				if err := s.createNamespaceSleepInfoWithExclusions(ctx, req.Tenant, namespace, suffix, offConv.TimeUTC, onDeployments, wdSleepUTC, wdWakeUTC, false, excludeRefs, req.ScheduleName, req.Description); err != nil {
+				// Para namespaces simples, usar el tiempo convertido directamente SIN delays
+				s.logger.Info("CreateSchedule: creating namespace SleepInfos", "suffix", suffix, "namespace", namespace, "offUTC", offConv.TimeUTC, "onUTC", onConv.TimeUTC, "wdSleepUTC", wdSleepUTC, "wdWakeUTC", wdWakeUTC)
+				if err := s.createNamespaceSleepInfoWithExclusions(ctx, req.Tenant, namespace, suffix, offConv.TimeUTC, onConv.TimeUTC, wdSleepUTC, wdWakeUTC, false, excludeRefs, req.ScheduleName, req.Description, userTZ); err != nil {
+					s.logger.Error(err, "failed to create namespace sleepinfo", "suffix", suffix, "namespace", namespace)
 					return fmt.Errorf("failed to create %s sleepinfo: %w", suffix, err)
 				}
+				s.logger.Info("CreateSchedule: namespace SleepInfos created successfully", "suffix", suffix, "namespace", namespace)
 			case "airflowsso":
-				if err := s.createNamespaceSleepInfoWithExclusions(ctx, req.Tenant, namespace, suffix, offConv.TimeUTC, onDeployments, wdSleepUTC, wdWakeUTC, true, excludeRefs, req.ScheduleName, req.Description); err != nil {
+				// Para airflowsso, usar el tiempo convertido directamente SIN delays
+				s.logger.Info("CreateSchedule: creating airflowsso SleepInfos", "namespace", namespace, "offUTC", offConv.TimeUTC, "onUTC", onConv.TimeUTC, "wdSleepUTC", wdSleepUTC, "wdWakeUTC", wdWakeUTC)
+				if err := s.createNamespaceSleepInfoWithExclusions(ctx, req.Tenant, namespace, suffix, offConv.TimeUTC, onConv.TimeUTC, wdSleepUTC, wdWakeUTC, true, excludeRefs, req.ScheduleName, req.Description, userTZ); err != nil {
+					s.logger.Error(err, "failed to create airflowsso sleepinfo", "namespace", namespace)
 					return fmt.Errorf("failed to create airflowsso sleepinfo: %w", err)
 				}
+				s.logger.Info("CreateSchedule: airflowsso SleepInfos created successfully", "namespace", namespace)
 			}
 		} else {
 			// Use wrapper functions for backward compatibility when no custom delays/exclusions
+			s.logger.Info("CreateSchedule: using wrapper functions (no custom delays/exclusions)", "suffix", suffix, "namespace", namespace)
 			switch suffix {
 			case "datastores":
-				if err := s.createDatastoresSleepInfos(ctx, req.Tenant, namespace, offConv.TimeUTC, onDeployments, onPgHDFS, onPgBouncer, wdSleepUTC, wdWakeUTC, req.ScheduleName, req.Description); err != nil {
+				s.logger.Info("CreateSchedule: creating datastores SleepInfos (wrapper)", "namespace", namespace)
+				if err := s.createDatastoresSleepInfos(ctx, req.Tenant, namespace, offConv.TimeUTC, onDeployments, onPgHDFS, onPgBouncer, wdSleepUTC, wdWakeUTC, req.ScheduleName, req.Description, userTZ); err != nil {
+					s.logger.Error(err, "failed to create datastores sleepinfos (wrapper)", "namespace", namespace)
 					return fmt.Errorf("failed to create datastores sleepinfos: %w", err)
 				}
+				s.logger.Info("CreateSchedule: datastores SleepInfos created successfully (wrapper)", "namespace", namespace)
 			case "apps", "rocket", "intelligence":
-				if err := s.createNamespaceSleepInfo(ctx, req.Tenant, namespace, suffix, offConv.TimeUTC, onDeployments, wdSleepUTC, wdWakeUTC, false, req.ScheduleName, req.Description); err != nil {
+				// Para namespaces simples, usar el tiempo convertido directamente SIN delays
+				s.logger.Info("CreateSchedule: creating namespace SleepInfos (wrapper)", "suffix", suffix, "namespace", namespace, "offUTC", offConv.TimeUTC, "onUTC", onConv.TimeUTC)
+				if err := s.createNamespaceSleepInfo(ctx, req.Tenant, namespace, suffix, offConv.TimeUTC, onConv.TimeUTC, wdSleepUTC, wdWakeUTC, false, req.ScheduleName, req.Description, userTZ); err != nil {
+					s.logger.Error(err, "failed to create namespace sleepinfo (wrapper)", "suffix", suffix, "namespace", namespace)
 					return fmt.Errorf("failed to create %s sleepinfo: %w", suffix, err)
 				}
+				s.logger.Info("CreateSchedule: namespace SleepInfos created successfully (wrapper)", "suffix", suffix, "namespace", namespace)
 			case "airflowsso":
-				if err := s.createNamespaceSleepInfo(ctx, req.Tenant, namespace, suffix, offConv.TimeUTC, onDeployments, wdSleepUTC, wdWakeUTC, true, req.ScheduleName, req.Description); err != nil {
+				// Para airflowsso, usar el tiempo convertido directamente SIN delays
+				s.logger.Info("CreateSchedule: creating airflowsso SleepInfos (wrapper)", "namespace", namespace, "offUTC", offConv.TimeUTC, "onUTC", onConv.TimeUTC)
+				if err := s.createNamespaceSleepInfo(ctx, req.Tenant, namespace, suffix, offConv.TimeUTC, onConv.TimeUTC, wdSleepUTC, wdWakeUTC, true, req.ScheduleName, req.Description, userTZ); err != nil {
+					s.logger.Error(err, "failed to create airflowsso sleepinfo (wrapper)", "namespace", namespace)
 					return fmt.Errorf("failed to create airflowsso sleepinfo: %w", err)
 				}
+				s.logger.Info("CreateSchedule: airflowsso SleepInfos created successfully (wrapper)", "namespace", namespace)
+			default:
+				s.logger.Info("CreateSchedule: unknown suffix, skipping", "suffix", suffix, "namespace", namespace)
 			}
 		}
 	}
 
+	s.logger.Info("CreateSchedule COMPLETED", "tenant", req.Tenant, "namespaces_processed", len(selectedNamespaces))
 	return nil
 }
 
@@ -266,7 +296,7 @@ func isNamespaceSelected(selected map[string]bool, suffix string) bool {
 }
 
 // createNamespaceSleepInfoWithExclusions creates a simple SleepInfo for a namespace with custom exclusions
-func (s *ScheduleService) createNamespaceSleepInfoWithExclusions(ctx context.Context, tenant, namespace, suffix, offUTC, onUTC, wdSleep, wdWake string, suspendStatefulSets bool, excludeRefs []kubegreenv1alpha1.FilterRef, scheduleName, description string) error {
+func (s *ScheduleService) createNamespaceSleepInfoWithExclusions(ctx context.Context, tenant, namespace, suffix, offUTC, onUTC, wdSleep, wdWake string, suspendStatefulSets bool, excludeRefs []kubegreenv1alpha1.FilterRef, scheduleName, description, userTimezone string) error {
 	// Check if weekdays are the same
 	sleepDays, _ := ExpandWeekdaysStr(wdSleep)
 	wakeDays, _ := ExpandWeekdaysStr(wdWake)
@@ -295,6 +325,7 @@ func (s *ScheduleService) createNamespaceSleepInfoWithExclusions(ctx context.Con
 		}
 
 		// Initialize annotations with schedule name and description
+		// Build annotations including userTimezone
 		annotations := make(map[string]string)
 		if scheduleName != "" {
 			annotations["kube-green.stratio.com/schedule-name"] = scheduleName
@@ -302,7 +333,15 @@ func (s *ScheduleService) createNamespaceSleepInfoWithExclusions(ctx context.Con
 		if description != "" {
 			annotations["kube-green.stratio.com/schedule-description"] = description
 		}
+		// Store userTimezone in annotations for easy access
+		if userTimezone != "" {
+			annotations["kube-green.stratio.com/user-timezone"] = userTimezone
+			s.logger.Info("createNamespaceSleepInfoWithExclusions: ADDED user-timezone to single SleepInfo annotations", "name", name, "namespace", namespace, "userTimezone", userTimezone)
+		} else {
+			s.logger.Error(nil, "createNamespaceSleepInfoWithExclusions: userTimezone is EMPTY for single SleepInfo", "name", name, "namespace", namespace)
+		}
 
+		s.logger.Info("createNamespaceSleepInfoWithExclusions: creating single SleepInfo", "name", name, "namespace", namespace, "userTimezone", userTimezone, "hasUserTimezoneAnnotation", annotations["kube-green.stratio.com/user-timezone"] != "")
 		sleepInfo = &kubegreenv1alpha1.SleepInfo{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:        name,
@@ -354,7 +393,7 @@ func (s *ScheduleService) createNamespaceSleepInfoWithExclusions(ctx context.Con
 			wakeName = fmt.Sprintf("wake-%s", scheduleName)
 		}
 
-		// Initialize annotations with schedule name and description
+		// Initialize annotations with schedule name, description, and userTimezone
 		sleepAnnotations := map[string]string{
 			"kube-green.stratio.com/pair-id":   sharedID,
 			"kube-green.stratio.com/pair-role": "sleep",
@@ -371,8 +410,17 @@ func (s *ScheduleService) createNamespaceSleepInfoWithExclusions(ctx context.Con
 			sleepAnnotations["kube-green.stratio.com/schedule-description"] = description
 			wakeAnnotations["kube-green.stratio.com/schedule-description"] = description
 		}
+		// Store userTimezone in annotations for easy access
+		if userTimezone != "" {
+			sleepAnnotations["kube-green.stratio.com/user-timezone"] = userTimezone
+			wakeAnnotations["kube-green.stratio.com/user-timezone"] = userTimezone
+			s.logger.Info("createNamespaceSleepInfoWithExclusions: ADDED user-timezone to annotations", "name", sleepName, "namespace", namespace, "userTimezone", userTimezone, "sleepAnnotations", fmt.Sprintf("%+v", sleepAnnotations))
+		} else {
+			s.logger.Error(nil, "createNamespaceSleepInfoWithExclusions: userTimezone is EMPTY, not adding to annotations", "name", sleepName, "namespace", namespace)
+		}
 
 		// Sleep SleepInfo
+		s.logger.Info("createNamespaceSleepInfoWithExclusions: creating sleep SleepInfo", "name", sleepName, "namespace", namespace, "userTimezone", userTimezone, "hasUserTimezoneAnnotation", sleepAnnotations["kube-green.stratio.com/user-timezone"] != "")
 		sleepSleepInfo := &kubegreenv1alpha1.SleepInfo{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:        sleepName,
@@ -428,27 +476,36 @@ func (s *ScheduleService) createNamespaceSleepInfoWithExclusions(ctx context.Con
 		}
 
 		// Create or update both SleepInfos
-		if err := s.createOrUpdateSleepInfo(ctx, sleepSleepInfo); err != nil {
+		s.logger.Info("createNamespaceSleepInfoWithExclusions: creating/updating sleep SleepInfo", "name", sleepSleepInfo.Name, "namespace", sleepSleepInfo.Namespace, "sleepTime", sleepSleepInfo.Spec.SleepTime, "weekdays", sleepSleepInfo.Spec.Weekdays)
+		if err := s.createOrUpdateSleepInfo(ctx, sleepSleepInfo, userTimezone); err != nil {
+			s.logger.Error(err, "failed to create/update sleep SleepInfo", "name", sleepSleepInfo.Name, "namespace", sleepSleepInfo.Namespace)
 			return err
 		}
+		s.logger.Info("createNamespaceSleepInfoWithExclusions: sleep SleepInfo created/updated successfully", "name", sleepSleepInfo.Name, "namespace", sleepSleepInfo.Namespace)
 
-		if err := s.createOrUpdateSleepInfo(ctx, wakeSleepInfo); err != nil {
+		s.logger.Info("createNamespaceSleepInfoWithExclusions: creating/updating wake SleepInfo", "name", wakeSleepInfo.Name, "namespace", wakeSleepInfo.Namespace, "sleepTime", wakeSleepInfo.Spec.SleepTime, "weekdays", wakeSleepInfo.Spec.Weekdays)
+		if err := s.createOrUpdateSleepInfo(ctx, wakeSleepInfo, userTimezone); err != nil {
+			s.logger.Error(err, "failed to create/update wake SleepInfo", "name", wakeSleepInfo.Name, "namespace", wakeSleepInfo.Namespace)
 			return err
 		}
+		s.logger.Info("createNamespaceSleepInfoWithExclusions: wake SleepInfo created/updated successfully", "name", wakeSleepInfo.Name, "namespace", wakeSleepInfo.Namespace)
 
 		return nil
 	}
 
 	// Create or update the SleepInfo (single SleepInfo case)
-	if err := s.createOrUpdateSleepInfo(ctx, sleepInfo); err != nil {
+	s.logger.Info("createNamespaceSleepInfoWithExclusions: creating/updating single SleepInfo", "name", sleepInfo.Name, "namespace", sleepInfo.Namespace, "sleepTime", sleepInfo.Spec.SleepTime, "wakeTime", sleepInfo.Spec.WakeUpTime, "weekdays", sleepInfo.Spec.Weekdays)
+	if err := s.createOrUpdateSleepInfo(ctx, sleepInfo, userTimezone); err != nil {
+		s.logger.Error(err, "failed to create/update SleepInfo", "name", sleepInfo.Name, "namespace", sleepInfo.Namespace)
 		return err
 	}
+	s.logger.Info("createNamespaceSleepInfoWithExclusions: SleepInfo created/updated successfully", "name", sleepInfo.Name, "namespace", sleepInfo.Namespace)
 
 	return nil
 }
 
 // createDatastoresSleepInfosWithExclusions creates the complex SleepInfos for datastores namespace with custom exclusions
-func (s *ScheduleService) createDatastoresSleepInfosWithExclusions(ctx context.Context, tenant, namespace, offUTC, onDeployments, onPgHDFS, onPgBouncer, wdSleep, wdWake string, excludeRefs []kubegreenv1alpha1.FilterRef, scheduleName, description string) error {
+func (s *ScheduleService) createDatastoresSleepInfosWithExclusions(ctx context.Context, tenant, namespace, offUTC, onDeployments, onPgHDFS, onPgBouncer, wdSleep, wdWake string, excludeRefs []kubegreenv1alpha1.FilterRef, scheduleName, description, userTimezone string) error {
 	suspendDeployments := true
 	suspendStatefulSets := true
 	suspendCronJobs := true
@@ -483,7 +540,7 @@ func (s *ScheduleService) createDatastoresSleepInfosWithExclusions(ctx context.C
 			sleepName = fmt.Sprintf("sleep-%s", scheduleName)
 		}
 
-		// Initialize annotations with schedule name and description
+		// Initialize annotations with schedule name, description, and userTimezone
 		sleepAnnotations := map[string]string{
 			"kube-green.stratio.com/pair-id":   sharedID,
 			"kube-green.stratio.com/pair-role": "sleep",
@@ -493,6 +550,10 @@ func (s *ScheduleService) createDatastoresSleepInfosWithExclusions(ctx context.C
 		}
 		if description != "" {
 			sleepAnnotations["kube-green.stratio.com/schedule-description"] = description
+		}
+		// Store userTimezone in annotations for easy access
+		if userTimezone != "" {
+			sleepAnnotations["kube-green.stratio.com/user-timezone"] = userTimezone
 		}
 
 		sleepInfo := &kubegreenv1alpha1.SleepInfo{
@@ -636,7 +697,7 @@ func (s *ScheduleService) createDatastoresSleepInfosWithExclusions(ctx context.C
 
 		sleepInfos := []*kubegreenv1alpha1.SleepInfo{sleepInfo, wakePgHdfs, wakePgbouncer, wakeDeployments}
 		for _, si := range sleepInfos {
-			if err := s.createOrUpdateSleepInfo(ctx, si); err != nil {
+			if err := s.createOrUpdateSleepInfo(ctx, si, userTimezone); err != nil {
 				return err
 			}
 		}
@@ -800,7 +861,7 @@ func (s *ScheduleService) createDatastoresSleepInfosWithExclusions(ctx context.C
 
 		sleepInfos := []*kubegreenv1alpha1.SleepInfo{sleepInfo, wakePgHdfs, wakePgbouncer, wakeDeployments}
 		for _, si := range sleepInfos {
-			if err := s.createOrUpdateSleepInfo(ctx, si); err != nil {
+			if err := s.createOrUpdateSleepInfo(ctx, si, userTimezone); err != nil {
 				return err
 			}
 		}
@@ -810,15 +871,27 @@ func (s *ScheduleService) createDatastoresSleepInfosWithExclusions(ctx context.C
 }
 
 // createDatastoresSleepInfos creates the complex SleepInfos for datastores namespace (wrapper for backward compatibility)
-func (s *ScheduleService) createDatastoresSleepInfos(ctx context.Context, tenant, namespace, offUTC, onDeployments, onPgHDFS, onPgBouncer, wdSleep, wdWake string, scheduleName, description string) error {
+// IMPORTANTE: Si los tiempos no tienen delays aplicados (onDeployments == onPgHDFS == onPgBouncer),
+// aplicar delays por defecto (5m para PgBouncer, 7m para Deployments) como en tenant_power.py
+func (s *ScheduleService) createDatastoresSleepInfos(ctx context.Context, tenant, namespace, offUTC, onDeployments, onPgHDFS, onPgBouncer, wdSleep, wdWake string, scheduleName, description, userTimezone string) error {
 	excludeRefs := getExcludeRefsForOperators()
-	return s.createDatastoresSleepInfosWithExclusions(ctx, tenant, namespace, offUTC, onDeployments, onPgHDFS, onPgBouncer, wdSleep, wdWake, excludeRefs, scheduleName, description)
+
+	// Si todos los tiempos son iguales, significa que no se aplicaron delays
+	// Aplicar delays por defecto como en tenant_power.py
+	if onDeployments == onPgHDFS && onPgHDFS == onPgBouncer {
+		// Aplicar delays por defecto: PgHDFS a t0, PgBouncer a t0+5m, Deployments a t0+7m
+		onPgBouncer, _ = AddMinutes(onPgHDFS, 5)
+		onDeployments, _ = AddMinutes(onPgHDFS, 7)
+		s.logger.Info("createDatastoresSleepInfos: applying default delays", "onPgHDFS", onPgHDFS, "onPgBouncer", onPgBouncer, "onDeployments", onDeployments)
+	}
+
+	return s.createDatastoresSleepInfosWithExclusions(ctx, tenant, namespace, offUTC, onDeployments, onPgHDFS, onPgBouncer, wdSleep, wdWake, excludeRefs, scheduleName, description, userTimezone)
 }
 
 // createNamespaceSleepInfo creates a simple SleepInfo for a namespace (wrapper for backward compatibility)
-func (s *ScheduleService) createNamespaceSleepInfo(ctx context.Context, tenant, namespace, suffix, offUTC, onUTC, wdSleep, wdWake string, suspendStatefulSets bool, scheduleName, description string) error {
+func (s *ScheduleService) createNamespaceSleepInfo(ctx context.Context, tenant, namespace, suffix, offUTC, onUTC, wdSleep, wdWake string, suspendStatefulSets bool, scheduleName, description, userTimezone string) error {
 	excludeRefs := getExcludeRefsForOperators()
-	return s.createNamespaceSleepInfoWithExclusions(ctx, tenant, namespace, suffix, offUTC, onUTC, wdSleep, wdWake, suspendStatefulSets, excludeRefs, scheduleName, description)
+	return s.createNamespaceSleepInfoWithExclusions(ctx, tenant, namespace, suffix, offUTC, onUTC, wdSleep, wdWake, suspendStatefulSets, excludeRefs, scheduleName, description, userTimezone)
 }
 
 // getExcludeRefsForOperators returns exclude refs for operator-managed resources
@@ -857,15 +930,33 @@ func (s *ScheduleService) validateScheduleNameUniqueness(ctx context.Context, na
 }
 
 // createOrUpdateSleepInfo creates or updates a SleepInfo and its associated secret
-func (s *ScheduleService) createOrUpdateSleepInfo(ctx context.Context, sleepInfo *kubegreenv1alpha1.SleepInfo) error {
+func (s *ScheduleService) createOrUpdateSleepInfo(ctx context.Context, sleepInfo *kubegreenv1alpha1.SleepInfo, userTimezone string) error {
 	var existing kubegreenv1alpha1.SleepInfo
 	err := s.client.Get(ctx, client.ObjectKeyFromObject(sleepInfo), &existing)
 	if err != nil {
 		if client.IgnoreNotFound(err) == nil {
 			// Not found, create
+			// IMPORTANTE: Asegurar que user-timezone esté en las anotaciones si se proporciona
+			if userTimezone != "" {
+				if sleepInfo.Annotations == nil {
+					sleepInfo.Annotations = make(map[string]string)
+				}
+				// Solo agregar si no está presente (para no sobrescribir si ya está)
+				if _, exists := sleepInfo.Annotations["kube-green.stratio.com/user-timezone"]; !exists {
+					sleepInfo.Annotations["kube-green.stratio.com/user-timezone"] = userTimezone
+					s.logger.Info("createOrUpdateSleepInfo: ADDED user-timezone to annotations before creating", "name", sleepInfo.Name, "namespace", sleepInfo.Namespace, "userTimezone", userTimezone)
+				}
+			}
+			userTZInAnnotations := ""
+			if sleepInfo.Annotations != nil {
+				userTZInAnnotations = sleepInfo.Annotations["kube-green.stratio.com/user-timezone"]
+			}
+			s.logger.Info("createOrUpdateSleepInfo: creating new SleepInfo", "name", sleepInfo.Name, "namespace", sleepInfo.Namespace, "sleepTime", sleepInfo.Spec.SleepTime, "wakeTime", sleepInfo.Spec.WakeUpTime, "weekdays", sleepInfo.Spec.Weekdays, "userTimezoneParam", userTimezone, "userTimezoneInAnnotations", userTZInAnnotations, "annotationsCount", len(sleepInfo.Annotations))
 			if err := s.client.Create(ctx, sleepInfo); err != nil {
+				s.logger.Error(err, "failed to create SleepInfo", "name", sleepInfo.Name, "namespace", sleepInfo.Namespace)
 				return err
 			}
+			s.logger.Info("createOrUpdateSleepInfo: SleepInfo created successfully", "name", sleepInfo.Name, "namespace", sleepInfo.Namespace)
 			// After Create(), the sleepInfo object should have the UID populated by the Kubernetes API
 			// However, if it's not available, try to get it with a retry
 			if sleepInfo.UID == "" {
@@ -889,9 +980,30 @@ func (s *ScheduleService) createOrUpdateSleepInfo(ctx context.Context, sleepInfo
 				}
 			}
 			// Create associated secret after SleepInfo is created (now we have the UID)
-			if err := s.createOrUpdateSecretForSleepInfo(ctx, sleepInfo); err != nil {
-				s.logger.Error(err, "failed to create secret for SleepInfo", "name", sleepInfo.Name, "namespace", sleepInfo.Namespace)
-				// Don't fail the entire operation if secret creation fails - controller will create it
+			// CRITICAL: Always create the secret, retry if needed
+			secretCreated := false
+			maxSecretRetries := 5
+			for i := 0; i < maxSecretRetries; i++ {
+				if err := s.createOrUpdateSecretForSleepInfo(ctx, sleepInfo, userTimezone); err != nil {
+					s.logger.Error(err, "failed to create secret for SleepInfo (retry)", "name", sleepInfo.Name, "namespace", sleepInfo.Namespace, "attempt", i+1, "maxRetries", maxSecretRetries)
+					if i < maxSecretRetries-1 {
+						// Wait before retrying (exponential backoff: 50ms, 100ms, 200ms, 400ms, 800ms)
+						time.Sleep(time.Duration(50*(1<<uint(i))) * time.Millisecond)
+						// Try to get the SleepInfo again to ensure we have the latest UID
+						var updated kubegreenv1alpha1.SleepInfo
+						if err := s.client.Get(ctx, client.ObjectKeyFromObject(sleepInfo), &updated); err == nil {
+							sleepInfo.UID = updated.UID
+						}
+					}
+				} else {
+					secretCreated = true
+					s.logger.Info("Secret created successfully for SleepInfo", "name", sleepInfo.Name, "namespace", sleepInfo.Namespace, "attempt", i+1)
+					break
+				}
+			}
+			if !secretCreated {
+				s.logger.Error(fmt.Errorf("failed to create secret after %d retries", maxSecretRetries), "CRITICAL: Secret not created for SleepInfo", "name", sleepInfo.Name, "namespace", sleepInfo.Namespace)
+				// Don't fail the entire operation - controller will create it, but log as error
 			}
 			return nil
 		}
@@ -899,20 +1011,81 @@ func (s *ScheduleService) createOrUpdateSleepInfo(ctx context.Context, sleepInfo
 	}
 
 	// Exists, update
+	s.logger.Info("createOrUpdateSleepInfo: updating existing SleepInfo", "name", sleepInfo.Name, "namespace", sleepInfo.Namespace, "sleepTime", sleepInfo.Spec.SleepTime, "wakeTime", sleepInfo.Spec.WakeUpTime, "weekdays", sleepInfo.Spec.Weekdays)
+
+	// IMPORTANTE: Merge inteligente de anotaciones
+	// 1. Inicializar annotations si es nil
+	if sleepInfo.Annotations == nil {
+		sleepInfo.Annotations = make(map[string]string)
+	}
+	
+	// 2. Guardar las anotaciones nuevas que vienen en sleepInfo (schedule-name, schedule-description, etc.)
+	newAnnotations := make(map[string]string)
+	for k, v := range sleepInfo.Annotations {
+		newAnnotations[k] = v
+	}
+	
+	// 3. Copiar TODAS las anotaciones existentes primero para preservarlas
+	for k, v := range existing.Annotations {
+		sleepInfo.Annotations[k] = v
+	}
+	
+	// 4. SOBRESCRIBIR con las anotaciones nuevas (schedule-name, schedule-description, pair-id, pair-role, etc.)
+	// Esto asegura que las anotaciones del request tengan prioridad
+	for k, v := range newAnnotations {
+		sleepInfo.Annotations[k] = v
+	}
+	
+	// 5. Actualizar userTimezone en las anotaciones si se proporciona
+	// Si no se proporciona, preservar el existente de las anotaciones
+	timezoneToUse := userTimezone
+	if timezoneToUse == "" {
+		// Leer userTimezone de las anotaciones existentes
+		if existingTZ, ok := sleepInfo.Annotations["kube-green.stratio.com/user-timezone"]; ok {
+			timezoneToUse = existingTZ
+			s.logger.Info("createOrUpdateSleepInfo: using timezone from existing annotations", "timezone", timezoneToUse, "name", sleepInfo.Name, "namespace", sleepInfo.Namespace)
+		}
+	} else {
+		// Agregar/actualizar user-timezone
+		sleepInfo.Annotations["kube-green.stratio.com/user-timezone"] = timezoneToUse
+		s.logger.Info("createOrUpdateSleepInfo: updating timezone in annotations", "timezone", timezoneToUse, "name", sleepInfo.Name, "namespace", sleepInfo.Namespace)
+	}
+	
+	// Log para debug
+	s.logger.Info("createOrUpdateSleepInfo: merged annotations", "name", sleepInfo.Name, "namespace", sleepInfo.Namespace, 
+		"scheduleName", sleepInfo.Annotations["kube-green.stratio.com/schedule-name"],
+		"description", sleepInfo.Annotations["kube-green.stratio.com/schedule-description"],
+		"userTimezone", sleepInfo.Annotations["kube-green.stratio.com/user-timezone"],
+		"totalAnnotations", len(sleepInfo.Annotations))
+
 	sleepInfo.ResourceVersion = existing.ResourceVersion
 	if err := s.client.Update(ctx, sleepInfo); err != nil {
+		s.logger.Error(err, "failed to update SleepInfo", "name", sleepInfo.Name, "namespace", sleepInfo.Namespace)
 		return err
 	}
-	// Update associated secret
-	if err := s.createOrUpdateSecretForSleepInfo(ctx, sleepInfo); err != nil {
-		s.logger.Error(err, "failed to update secret for SleepInfo", "name", sleepInfo.Name, "namespace", sleepInfo.Namespace)
-		// Don't fail the entire operation if secret update fails - controller will update it
+	s.logger.Info("createOrUpdateSleepInfo: SleepInfo updated successfully", "name", sleepInfo.Name, "namespace", sleepInfo.Namespace)
+
+	// Update associated secret - CRITICAL: Always update/create the secret
+	// Use the timezone from request if available, otherwise use the one from existing annotations
+	if err := s.createOrUpdateSecretForSleepInfo(ctx, sleepInfo, timezoneToUse); err != nil {
+		s.logger.Error(err, "CRITICAL: failed to update secret for SleepInfo", "name", sleepInfo.Name, "namespace", sleepInfo.Namespace)
+		// Retry once
+		time.Sleep(100 * time.Millisecond)
+		if err := s.createOrUpdateSecretForSleepInfo(ctx, sleepInfo, timezoneToUse); err != nil {
+			s.logger.Error(err, "CRITICAL: failed to update secret after retry", "name", sleepInfo.Name, "namespace", sleepInfo.Namespace)
+			// Don't fail the entire operation - controller will update it, but log as error
+		} else {
+			s.logger.Info("Secret updated successfully after retry", "name", sleepInfo.Name, "namespace", sleepInfo.Namespace)
+		}
+	} else {
+		s.logger.Info("Secret updated successfully for SleepInfo", "name", sleepInfo.Name, "namespace", sleepInfo.Namespace)
 	}
 	return nil
 }
 
 // createOrUpdateSecretForSleepInfo creates or updates the secret associated with a SleepInfo
-func (s *ScheduleService) createOrUpdateSecretForSleepInfo(ctx context.Context, sleepInfo *kubegreenv1alpha1.SleepInfo) error {
+func (s *ScheduleService) createOrUpdateSecretForSleepInfo(ctx context.Context, sleepInfo *kubegreenv1alpha1.SleepInfo, userTimezone string) error {
+	s.logger.Info("createOrUpdateSecretForSleepInfo CALLED", "sleepInfo", sleepInfo.Name, "namespace", sleepInfo.Namespace, "userTimezone", userTimezone, "userTimezoneEmpty", userTimezone == "")
 	secretName := fmt.Sprintf("sleepinfo-%s", sleepInfo.Name)
 
 	// Determine operation type based on SleepInfo annotations or spec
@@ -952,6 +1125,14 @@ func (s *ScheduleService) createOrUpdateSecretForSleepInfo(ctx context.Context, 
 		Data: make(map[string][]byte),
 	}
 
+	// Add userTimezone to secret if provided
+	if userTimezone != "" {
+		secret.StringData["user-timezone"] = userTimezone
+		s.logger.Info("createOrUpdateSecretForSleepInfo: adding user-timezone to secret", "userTimezone", userTimezone, "secret", secretName, "namespace", sleepInfo.Namespace)
+	} else {
+		s.logger.Error(nil, "createOrUpdateSecretForSleepInfo: userTimezone is empty, not adding to secret", "secret", secretName, "namespace", sleepInfo.Namespace)
+	}
+
 	// Add OwnerReference only if UID is available
 	if sleepInfo.UID != "" {
 		secret.OwnerReferences = []metav1.OwnerReference{
@@ -972,19 +1153,38 @@ func (s *ScheduleService) createOrUpdateSecretForSleepInfo(ctx context.Context, 
 		if originalData, ok := existingSecret.Data["original-resource-info"]; ok {
 			secret.Data["original-resource-info"] = originalData
 		}
-		// Also preserve any other existing data fields
+		// Also preserve any other existing data fields (except user-timezone which we update)
 		for key, value := range existingSecret.Data {
-			if key != "original-resource-info" && key != "scheduled-at" && key != "operation-type" {
+			if key != "original-resource-info" && key != "scheduled-at" && key != "operation-type" && key != "user-timezone" {
 				secret.Data[key] = value
 			}
 		}
+		// Update user-timezone if provided
+		if userTimezone != "" {
+			secret.StringData["user-timezone"] = userTimezone
+		}
 		// Update the secret
-		return s.client.Update(ctx, secret)
+		if err := s.client.Update(ctx, secret); err != nil {
+			s.logger.Error(err, "CRITICAL: failed to update secret", "secret", secretName, "namespace", sleepInfo.Namespace, "operationType", operationType)
+			return fmt.Errorf("failed to update secret %s in namespace %s: %w", secretName, sleepInfo.Namespace, err)
+		}
+		s.logger.Info("Secret updated successfully", "secret", secretName, "namespace", sleepInfo.Namespace, "operationType", operationType, "scheduledAt", now.Format(time.RFC3339))
+		return nil
 	}
 
 	// Create new secret
 	// NOTE: original-resource-info will be added by the controller when it executes sleep operation
-	return s.client.Create(ctx, secret)
+	stringDataKeys := make([]string, 0, len(secret.StringData))
+	for k := range secret.StringData {
+		stringDataKeys = append(stringDataKeys, k)
+	}
+	s.logger.Info("createOrUpdateSecretForSleepInfo: creating new secret", "secret", secretName, "namespace", sleepInfo.Namespace, "userTimezone", userTimezone, "stringDataKeys", strings.Join(stringDataKeys, ","))
+	if err := s.client.Create(ctx, secret); err != nil {
+		s.logger.Error(err, "CRITICAL: failed to create secret", "secret", secretName, "namespace", sleepInfo.Namespace, "operationType", operationType)
+		return fmt.Errorf("failed to create secret %s in namespace %s: %w", secretName, sleepInfo.Namespace, err)
+	}
+	s.logger.Info("Secret created successfully", "secret", secretName, "namespace", sleepInfo.Namespace, "operationType", operationType, "scheduledAt", now.Format(time.RFC3339), "userTimezone", userTimezone)
+	return nil
 }
 
 // ScheduleResponse represents a schedule for a tenant
@@ -1065,7 +1265,7 @@ func (s *ScheduleService) ListSchedules(ctx context.Context) ([]ScheduleResponse
 	for tenant, namespaceGroups := range tenantMap {
 		namespaces := make(map[string]NamespaceInfo)
 		for suffix, sleepInfos := range namespaceGroups {
-			namespaces[suffix] = buildNamespaceInfo(sleepInfos)
+			namespaces[suffix] = s.buildNamespaceInfo(ctx, sleepInfos)
 		}
 		result = append(result, ScheduleResponse{
 			Tenant:     tenant,
@@ -1123,7 +1323,7 @@ func (s *ScheduleService) GetSchedule(ctx context.Context, tenant string, namesp
 
 	// Process each namespace group
 	for suffix, sleepInfos := range namespaceGroups {
-		namespaceInfo := buildNamespaceInfo(sleepInfos)
+		namespaceInfo := s.buildNamespaceInfo(ctx, sleepInfos)
 		namespaces[suffix] = namespaceInfo
 	}
 
@@ -1134,7 +1334,7 @@ func (s *ScheduleService) GetSchedule(ctx context.Context, tenant string, namesp
 }
 
 // buildNamespaceInfo creates a NamespaceInfo from a list of SleepInfos
-func buildNamespaceInfo(sleepInfos []kubegreenv1alpha1.SleepInfo) NamespaceInfo {
+func (s *ScheduleService) buildNamespaceInfo(ctx context.Context, sleepInfos []kubegreenv1alpha1.SleepInfo) NamespaceInfo {
 	if len(sleepInfos) == 0 {
 		return NamespaceInfo{}
 	}
@@ -1156,7 +1356,7 @@ func buildNamespaceInfo(sleepInfos []kubegreenv1alpha1.SleepInfo) NamespaceInfo 
 	var operations []string
 
 	for _, si := range sleepInfos {
-		summary := buildSleepInfoSummary(si)
+		summary := s.buildSleepInfoSummary(ctx, si)
 		summaries = append(summaries, summary)
 
 		// Track times for summary
@@ -1189,7 +1389,8 @@ func buildNamespaceInfo(sleepInfos []kubegreenv1alpha1.SleepInfo) NamespaceInfo 
 }
 
 // buildSleepInfoSummary creates a SleepInfoSummary from a SleepInfo
-func buildSleepInfoSummary(si kubegreenv1alpha1.SleepInfo) SleepInfoSummary {
+// It reads the associated Secret to extract userTimezone and adds it to annotations in the response
+func (s *ScheduleService) buildSleepInfoSummary(ctx context.Context, si kubegreenv1alpha1.SleepInfo) SleepInfoSummary {
 	// Determine role from annotations or name
 	role := "wake"
 	operation := "Encender servicios"
@@ -1201,9 +1402,19 @@ func buildSleepInfoSummary(si kubegreenv1alpha1.SleepInfo) SleepInfoSummary {
 	}
 
 	// Determine time
+	// IMPORTANTE: El CRD usa sleepAt y wakeUpAt en JSON, pero el struct Go usa SleepTime y WakeUpTime
+	// Para sleep: usar SleepTime (que es sleepAt en JSON)
+	// Para wake: si es un SleepInfo separado, SleepTime contiene la hora de wake (sleepAt en JSON)
+	//            si es un SleepInfo único, WakeUpTime contiene la hora de wake (wakeUpAt en JSON)
 	time := si.Spec.SleepTime
 	if time == "" {
 		time = si.Spec.WakeUpTime
+	}
+
+	// Si el role es "wake" y no hay WakeUpTime, entonces SleepTime es la hora de wake
+	// (esto pasa cuando weekdays son diferentes y se crean SleepInfos separados)
+	if role == "wake" && time == "" && si.Spec.SleepTime != "" {
+		time = si.Spec.SleepTime
 	}
 
 	// Determine resources managed
@@ -1226,6 +1437,13 @@ func buildSleepInfoSummary(si kubegreenv1alpha1.SleepInfo) SleepInfoSummary {
 		}
 	}
 
+	// Copy annotations (userTimezone is already stored in annotations)
+	annotations := make(map[string]string)
+	for k, v := range si.Annotations {
+		annotations[k] = v
+	}
+	// userTimezone is already in annotations if it was set during creation
+
 	summary := SleepInfoSummary{
 		Name:        si.Name,
 		Namespace:   si.Namespace,
@@ -1236,7 +1454,7 @@ func buildSleepInfoSummary(si kubegreenv1alpha1.SleepInfo) SleepInfoSummary {
 		TimeZone:    si.Spec.TimeZone,
 		WakeTime:    si.Spec.WakeUpTime,
 		Resources:   resources,
-		Annotations: si.Annotations,
+		Annotations: annotations,
 		ExcludeRef:  excludeRefs,
 	}
 
@@ -1353,7 +1571,7 @@ func (s *ScheduleService) UpdateSchedule(ctx context.Context, tenant string, req
 	// Solo extraer valores del schedule existente si realmente están vacíos (no sobrescribir valores del frontend)
 	// Los tiempos del schedule existente están en UTC, necesitamos convertirlos a la timezone del usuario
 	// IMPORTANTE: NO extraer si el frontend ya envió los valores
-	s.logger.Info("UpdateSchedule", "tenant", tenant, "namespace", filterNamespace, "req.Off", req.Off, "req.On", req.On, "req.WeekdaysSleep", req.WeekdaysSleep, "req.WeekdaysWake", req.WeekdaysWake)
+	s.logger.Info("UpdateSchedule", "tenant", tenant, "namespace", filterNamespace, "req.Off", req.Off, "req.On", req.On, "req.WeekdaysSleep", req.WeekdaysSleep, "req.WeekdaysWake", req.WeekdaysWake, "req.UserTimezone", req.UserTimezone, "req.ClusterTimezone", req.ClusterTimezone)
 
 	if req.Off == "" || req.On == "" {
 		s.logger.Info("UpdateSchedule: extracting times from existing schedule", "off_empty", req.Off == "", "on_empty", req.On == "")
@@ -1497,10 +1715,12 @@ func (s *ScheduleService) UpdateSchedule(ctx context.Context, tenant string, req
 
 	// IMPORTANTE: Si req.Namespaces está vacío, obtener todos los namespaces del schedule existente
 	// Esto asegura que se actualicen todos los namespaces que tienen schedules, no solo los que el frontend envía
+	var existingSchedule *ScheduleResponse
 	if len(req.Namespaces) == 0 {
 		s.logger.Info("UpdateSchedule: req.Namespaces is empty, extracting from existing schedule", "tenant", tenant, "namespace", filterNamespace)
 		existing, err := s.GetSchedule(ctx, tenant, filterNamespace)
 		if err == nil && existing != nil {
+			existingSchedule = existing
 			// Extraer todos los namespaces que tienen schedules
 			namespacesList := make([]string, 0, len(existing.Namespaces))
 			for nsSuffix := range existing.Namespaces {
@@ -1513,6 +1733,142 @@ func (s *ScheduleService) UpdateSchedule(ctx context.Context, tenant string, req
 		}
 	} else {
 		s.logger.Info("UpdateSchedule: using namespaces from request", "namespaces", strings.Join(req.Namespaces, ","), "count", len(req.Namespaces))
+		// Obtener schedule existente para extraer delays si no se proporcionan
+		if req.Delays == nil {
+			existing, err := s.GetSchedule(ctx, tenant, filterNamespace)
+			if err == nil && existing != nil {
+				existingSchedule = existing
+			}
+		}
+	}
+
+	// IMPORTANTE: Extraer weekdays del schedule existente si no se proporcionan en el request
+	// Los weekdays del schedule existente están en UTC (ya shiftados), necesitamos convertirlos de vuelta a la timezone del usuario
+	if (req.WeekdaysSleep == "" || req.WeekdaysWake == "") && existingSchedule != nil {
+		// Get timezones for conversion
+		userTZ := req.UserTimezone
+		if userTZ == "" {
+			userTZ = TZLocal
+		}
+		clusterTZ := req.ClusterTimezone
+		if clusterTZ == "" {
+			clusterTZ = TZUTC
+		}
+
+		// Buscar schedules sleep y wake en el schedule existente
+		for _, nsInfo := range existingSchedule.Namespaces {
+			if len(nsInfo.Schedule) > 0 {
+				// Get cluster timezone from existing schedule
+				first := nsInfo.Schedule[0]
+				if first.TimeZone != "" {
+					clusterTZ = first.TimeZone
+				}
+
+				// Buscar schedule sleep para extraer weekdays
+				if req.WeekdaysSleep == "" {
+					var sleepSchedule *SleepInfoSummary
+					for i := range nsInfo.Schedule {
+						if nsInfo.Schedule[i].Role == "sleep" {
+							sleepSchedule = &nsInfo.Schedule[i]
+							break
+						}
+					}
+
+					// Si no se encuentra schedule sleep separado, buscar en el schedule único
+					if sleepSchedule == nil {
+						for i := range nsInfo.Schedule {
+							sched := &nsInfo.Schedule[i]
+							if sched.Role == "sleep" || (sched.Role == "" && sched.Time != "" && sched.WakeTime == "") {
+								sleepSchedule = sched
+								break
+							}
+						}
+					}
+
+					if sleepSchedule != nil && sleepSchedule.Weekdays != "" {
+						// Los weekdays están en UTC, necesitamos convertirlos de vuelta a la timezone del usuario
+						// Para esto, necesitamos el tiempo de sleep para calcular el day shift
+						sleepTimeUTC := sleepSchedule.Time
+						if sleepTimeUTC != "" {
+							// Calcular day shift usando FromClusterToUserTimezone
+							offConv, err := FromClusterToUserTimezone(sleepTimeUTC, clusterTZ, userTZ)
+							if err == nil {
+								// Aplicar shift inverso (negativo) para convertir de UTC a user timezone
+								wdSleepUser, err := ShiftWeekdaysStr(sleepSchedule.Weekdays, -offConv.DayShift)
+								if err == nil {
+									// Convertir de formato Kube (0-6) a formato Human (0-6 pero puede ser range o comma-separated)
+									// El formato ya debería estar en formato correcto, solo necesitamos asegurarnos
+									req.WeekdaysSleep = wdSleepUser
+									s.logger.Info("UpdateSchedule: converted WeekdaysSleep from UTC to user timezone", "from_utc", sleepSchedule.Weekdays, "to_user", req.WeekdaysSleep, "dayShift", -offConv.DayShift, "sleepTimeUTC", sleepTimeUTC)
+								} else {
+									s.logger.Error(err, "failed to shift sleep weekdays", "weekdays", sleepSchedule.Weekdays, "dayShift", -offConv.DayShift)
+								}
+							} else {
+								s.logger.Error(err, "failed to convert sleep time for weekday conversion", "time", sleepTimeUTC)
+							}
+						}
+					}
+				}
+
+				// Buscar schedule wake para extraer weekdays
+				if req.WeekdaysWake == "" {
+					var wakeSchedule *SleepInfoSummary
+					for i := range nsInfo.Schedule {
+						if nsInfo.Schedule[i].Role == "wake" {
+							wakeSchedule = &nsInfo.Schedule[i]
+							break
+						}
+					}
+
+					// Si no se encuentra schedule wake separado, buscar en el schedule único
+					if wakeSchedule == nil {
+						for i := range nsInfo.Schedule {
+							sched := &nsInfo.Schedule[i]
+							if sched.Role == "wake" || (sched.WakeTime != "" && sched.Role == "") {
+								wakeSchedule = sched
+								break
+							}
+						}
+					}
+
+					if wakeSchedule != nil && wakeSchedule.Weekdays != "" {
+						// Los weekdays están en UTC, necesitamos convertirlos de vuelta a la timezone del usuario
+						// Para esto, necesitamos el tiempo de wake para calcular el day shift
+						wakeTimeUTC := wakeSchedule.Time
+						if wakeTimeUTC == "" && wakeSchedule.WakeTime != "" {
+							wakeTimeUTC = wakeSchedule.WakeTime
+						}
+						if wakeTimeUTC != "" {
+							// Calcular day shift usando FromClusterToUserTimezone
+							onConv, err := FromClusterToUserTimezone(wakeTimeUTC, clusterTZ, userTZ)
+							if err == nil {
+								// Aplicar shift inverso (negativo) para convertir de UTC a user timezone
+								wdWakeUser, err := ShiftWeekdaysStr(wakeSchedule.Weekdays, -onConv.DayShift)
+								if err == nil {
+									req.WeekdaysWake = wdWakeUser
+									s.logger.Info("UpdateSchedule: converted WeekdaysWake from UTC to user timezone", "from_utc", wakeSchedule.Weekdays, "to_user", req.WeekdaysWake, "dayShift", -onConv.DayShift, "wakeTimeUTC", wakeTimeUTC)
+								} else {
+									s.logger.Error(err, "failed to shift wake weekdays", "weekdays", wakeSchedule.Weekdays, "dayShift", -onConv.DayShift)
+								}
+							} else {
+								s.logger.Error(err, "failed to convert wake time for weekday conversion", "time", wakeTimeUTC)
+							}
+						}
+					}
+				}
+				break
+			}
+		}
+	}
+
+	// IMPORTANTE: Extraer delays del schedule existente si no se proporcionan en el request
+	// Esto preserva los delays configurados previamente
+	if req.Delays == nil && existingSchedule != nil {
+		extractedDelays := s.extractDelaysFromSchedule(existingSchedule, req.Namespaces)
+		if extractedDelays != nil {
+			req.Delays = extractedDelays
+			s.logger.Info("UpdateSchedule: extracted delays from existing schedule", "delays", fmt.Sprintf("%+v", extractedDelays))
+		}
 	}
 
 	// IMPORTANTE: Eliminar SleepInfos antiguos ANTES de crear los nuevos
@@ -1530,9 +1886,11 @@ func (s *ScheduleService) UpdateSchedule(ctx context.Context, tenant string, req
 	// Si no están, usar valores por defecto (todos los días)
 	if req.WeekdaysSleep == "" {
 		req.WeekdaysSleep = "0-6"
+		s.logger.Info("UpdateSchedule: using default WeekdaysSleep", "weekdaysSleep", req.WeekdaysSleep)
 	}
 	if req.WeekdaysWake == "" {
 		req.WeekdaysWake = req.WeekdaysSleep // Si no se especifica, usar el mismo que sleep
+		s.logger.Info("UpdateSchedule: using default WeekdaysWake", "weekdaysWake", req.WeekdaysWake)
 	}
 
 	req.Tenant = tenant
@@ -2197,9 +2555,10 @@ func (s *ScheduleService) CreateNamespaceSchedule(ctx context.Context, req Names
 		}
 	} else {
 		// Default delays (like Python script)
-		onPgHDFS = onConv.TimeUTC                        // t0
-		onPgBouncer, _ = AddMinutes(onConv.TimeUTC, 5)   // t0+5m
-		onDeployments, _ = AddMinutes(onConv.TimeUTC, 7) // t0+7m
+		onPgHDFS = onConv.TimeUTC // t0
+		// Aplicar delays por defecto SOLO para datastores (staggered wake)
+		onPgBouncer, _ = AddMinutes(onConv.TimeUTC, 5)   // t0+5m para PgBouncer
+		onDeployments, _ = AddMinutes(onConv.TimeUTC, 7) // t0+7m para Deployments
 	}
 
 	// 6. Build excludeRefs
@@ -2246,7 +2605,7 @@ func (s *ScheduleService) CreateNamespaceSchedule(ctx context.Context, req Names
 
 	if hasCRDs {
 		// Apply staggered wake logic when CRDs are detected
-		if err := s.createDatastoresSleepInfosWithExclusions(ctx, req.Tenant, namespace, offConv.TimeUTC, onDeployments, onPgHDFS, onPgBouncer, wdSleepUTC, wdWakeUTC, kubeExcludeRefs, req.ScheduleName, req.Description); err != nil {
+		if err := s.createDatastoresSleepInfosWithExclusions(ctx, req.Tenant, namespace, offConv.TimeUTC, onDeployments, onPgHDFS, onPgBouncer, wdSleepUTC, wdWakeUTC, kubeExcludeRefs, req.ScheduleName, req.Description, userTZ); err != nil {
 			return fmt.Errorf("failed to create staggered sleepinfos: %w", err)
 		}
 	} else {
@@ -2258,7 +2617,7 @@ func (s *ScheduleService) CreateNamespaceSchedule(ctx context.Context, req Names
 			suspendStatefulSets = true
 		}
 
-		if err := s.createNamespaceSleepInfoWithExclusions(ctx, req.Tenant, namespace, req.Namespace, offConv.TimeUTC, onDeployments, wdSleepUTC, wdWakeUTC, suspendStatefulSets, kubeExcludeRefs, req.ScheduleName, req.Description); err != nil {
+		if err := s.createNamespaceSleepInfoWithExclusions(ctx, req.Tenant, namespace, req.Namespace, offConv.TimeUTC, onDeployments, wdSleepUTC, wdWakeUTC, suspendStatefulSets, kubeExcludeRefs, req.ScheduleName, req.Description, userTZ); err != nil {
 			return fmt.Errorf("failed to create namespace sleepinfo: %w", err)
 		}
 	}
@@ -2278,6 +2637,131 @@ func (s *ScheduleService) UpdateNamespaceSchedule(ctx context.Context, req Names
 
 	// Create new schedule
 	return s.CreateNamespaceSchedule(ctx, req)
+}
+
+// extractDelaysFromSchedule extrae los delays configurados de un schedule existente
+// analizando los tiempos de los SleepInfos wake en namespaces datastores
+func (s *ScheduleService) extractDelaysFromSchedule(existing *ScheduleResponse, targetNamespaces []string) *DelayConfig {
+	// Buscar namespace datastores para extraer delays (solo datastores tiene staggered wake)
+	var datastoresNS *NamespaceInfo
+	for _, nsSuffix := range targetNamespaces {
+		if nsSuffix == "datastores" {
+			if nsInfo, ok := existing.Namespaces["datastores"]; ok {
+				datastoresNS = &nsInfo
+				break
+			}
+		}
+	}
+
+	if datastoresNS == nil || len(datastoresNS.Schedule) == 0 {
+		// No hay datastores o no hay schedules, no hay delays que extraer
+		return nil
+	}
+
+	// Buscar todos los SleepInfos wake en datastores
+	var wakeSchedules []SleepInfoSummary
+	for _, sched := range datastoresNS.Schedule {
+		if sched.Role == "wake" {
+			wakeSchedules = append(wakeSchedules, sched)
+		}
+	}
+
+	if len(wakeSchedules) < 2 {
+		// No hay suficientes wake schedules para calcular delays (necesitamos al menos 2)
+		return nil
+	}
+
+	// Encontrar el tiempo base (el más temprano) - este es PgHDFS (t0)
+	baseTime := ""
+	for _, sched := range wakeSchedules {
+		if baseTime == "" || sched.Time < baseTime {
+			baseTime = sched.Time
+		}
+	}
+
+	if baseTime == "" {
+		return nil
+	}
+
+	// Calcular delays basándose en los tiempos y los recursos que manejan
+	delays := &DelayConfig{}
+
+	for _, sched := range wakeSchedules {
+		if sched.Time == baseTime {
+			continue // Skip el tiempo base
+		}
+
+		// Calcular diferencia en minutos
+		delayMinutes := calculateTimeDifferenceMinutes(baseTime, sched.Time)
+		if delayMinutes < 0 {
+			// Si el delay es negativo, puede ser que el día cambió, ajustar
+			delayMinutes += 24 * 60
+		}
+
+		// Identificar el tipo de delay basándose en los recursos
+		hasPostgres := false
+		hasHdfs := false
+		hasPgbouncer := false
+		hasDeployments := false
+
+		for _, resource := range sched.Resources {
+			resourceLower := strings.ToLower(resource)
+			if strings.Contains(resourceLower, "postgres") {
+				hasPostgres = true
+			}
+			if strings.Contains(resourceLower, "hdfs") {
+				hasHdfs = true
+			}
+			if strings.Contains(resourceLower, "pgbouncer") {
+				hasPgbouncer = true
+			}
+			if strings.Contains(resourceLower, "deployment") {
+				hasDeployments = true
+			}
+		}
+
+		// Mapear a los campos de DelayConfig
+		// DelayConfig usa: SuspendDeploymentsPgbouncer y SuspendDeployments
+		if hasPgbouncer && !hasDeployments && delays.SuspendDeploymentsPgbouncer == "" {
+			delays.SuspendDeploymentsPgbouncer = formatMinutesToDelay(delayMinutes)
+		} else if hasDeployments && !hasPostgres && !hasHdfs && delays.SuspendDeployments == "" {
+			delays.SuspendDeployments = formatMinutesToDelay(delayMinutes)
+		}
+	}
+
+	// Solo retornar si se encontraron delays
+	if delays.SuspendDeploymentsPgbouncer != "" || delays.SuspendDeployments != "" {
+		return delays
+	}
+
+	return nil
+}
+
+// calculateTimeDifferenceMinutes calcula la diferencia en minutos entre dos tiempos HH:MM
+func calculateTimeDifferenceMinutes(time1, time2 string) int {
+	parts1 := strings.Split(time1, ":")
+	parts2 := strings.Split(time2, ":")
+	if len(parts1) != 2 || len(parts2) != 2 {
+		return 0
+	}
+
+	hour1, _ := strconv.Atoi(parts1[0])
+	min1, _ := strconv.Atoi(parts1[1])
+	hour2, _ := strconv.Atoi(parts2[0])
+	min2, _ := strconv.Atoi(parts2[1])
+
+	totalMinutes1 := hour1*60 + min1
+	totalMinutes2 := hour2*60 + min2
+
+	return totalMinutes2 - totalMinutes1
+}
+
+// formatMinutesToDelay formatea minutos a formato delay (e.g., "5m", "7m")
+func formatMinutesToDelay(minutes int) string {
+	if minutes < 0 {
+		minutes += 24 * 60 // Ajustar si es negativo (cambio de día)
+	}
+	return fmt.Sprintf("%dm", minutes)
 }
 
 // DeleteNamespaceSchedule deletes all SleepInfos for a specific namespace
