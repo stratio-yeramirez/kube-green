@@ -1018,24 +1018,24 @@ func (s *ScheduleService) createOrUpdateSleepInfo(ctx context.Context, sleepInfo
 	if sleepInfo.Annotations == nil {
 		sleepInfo.Annotations = make(map[string]string)
 	}
-	
+
 	// 2. Guardar las anotaciones nuevas que vienen en sleepInfo (schedule-name, schedule-description, etc.)
 	newAnnotations := make(map[string]string)
 	for k, v := range sleepInfo.Annotations {
 		newAnnotations[k] = v
 	}
-	
+
 	// 3. Copiar TODAS las anotaciones existentes primero para preservarlas
 	for k, v := range existing.Annotations {
 		sleepInfo.Annotations[k] = v
 	}
-	
+
 	// 4. SOBRESCRIBIR con las anotaciones nuevas (schedule-name, schedule-description, pair-id, pair-role, etc.)
 	// Esto asegura que las anotaciones del request tengan prioridad
 	for k, v := range newAnnotations {
 		sleepInfo.Annotations[k] = v
 	}
-	
+
 	// 5. Actualizar userTimezone en las anotaciones si se proporciona
 	// Si no se proporciona, preservar el existente de las anotaciones
 	timezoneToUse := userTimezone
@@ -1050,9 +1050,9 @@ func (s *ScheduleService) createOrUpdateSleepInfo(ctx context.Context, sleepInfo
 		sleepInfo.Annotations["kube-green.stratio.com/user-timezone"] = timezoneToUse
 		s.logger.Info("createOrUpdateSleepInfo: updating timezone in annotations", "timezone", timezoneToUse, "name", sleepInfo.Name, "namespace", sleepInfo.Namespace)
 	}
-	
+
 	// Log para debug
-	s.logger.Info("createOrUpdateSleepInfo: merged annotations", "name", sleepInfo.Name, "namespace", sleepInfo.Namespace, 
+	s.logger.Info("createOrUpdateSleepInfo: merged annotations", "name", sleepInfo.Name, "namespace", sleepInfo.Namespace,
 		"scheduleName", sleepInfo.Annotations["kube-green.stratio.com/schedule-name"],
 		"description", sleepInfo.Annotations["kube-green.stratio.com/schedule-description"],
 		"userTimezone", sleepInfo.Annotations["kube-green.stratio.com/user-timezone"],
@@ -1869,6 +1869,54 @@ func (s *ScheduleService) UpdateSchedule(ctx context.Context, tenant string, req
 			req.Delays = extractedDelays
 			s.logger.Info("UpdateSchedule: extracted delays from existing schedule", "delays", fmt.Sprintf("%+v", extractedDelays))
 		}
+	}
+
+	// IMPORTANTE: Extraer scheduleName y description del schedule existente si no se proporcionan en el request
+	// Esto preserva las anotaciones cuando se actualiza solo la hora o el día
+	// Log para debug: ver qué valores vienen en el request
+	s.logger.Info("UpdateSchedule: checking scheduleName and description", 
+		"req.ScheduleName", req.ScheduleName, 
+		"req.Description", req.Description,
+		"hasExistingSchedule", existingSchedule != nil)
+	
+	if (req.ScheduleName == "" || req.Description == "") && existingSchedule != nil {
+		s.logger.Info("UpdateSchedule: attempting to extract scheduleName and description from existing schedule")
+		for _, nsInfo := range existingSchedule.Namespaces {
+			for _, sched := range nsInfo.Schedule {
+				// Log para debug: ver qué anotaciones tiene el schedule
+				if sched.Annotations != nil {
+					s.logger.Info("UpdateSchedule: checking schedule annotations", 
+						"scheduleName", sched.Annotations["kube-green.stratio.com/schedule-name"],
+						"description", sched.Annotations["kube-green.stratio.com/schedule-description"],
+						"allAnnotations", fmt.Sprintf("%+v", sched.Annotations))
+				}
+				// Extraer scheduleName de las anotaciones si no se proporciona
+				if req.ScheduleName == "" && sched.Annotations != nil {
+					if scheduleName, ok := sched.Annotations["kube-green.stratio.com/schedule-name"]; ok && scheduleName != "" {
+						req.ScheduleName = scheduleName
+						s.logger.Info("UpdateSchedule: extracted scheduleName from existing schedule", "scheduleName", scheduleName)
+					}
+				}
+				// Extraer description de las anotaciones si no se proporciona
+				if req.Description == "" && sched.Annotations != nil {
+					if description, ok := sched.Annotations["kube-green.stratio.com/schedule-description"]; ok && description != "" {
+						req.Description = description
+						s.logger.Info("UpdateSchedule: extracted description from existing schedule", "description", description)
+					}
+				}
+				// Si ya encontramos ambos, salir del loop
+				if req.ScheduleName != "" && req.Description != "" {
+					break
+				}
+			}
+			// Si ya encontramos ambos, salir del loop de namespaces
+			if req.ScheduleName != "" && req.Description != "" {
+				break
+			}
+		}
+		s.logger.Info("UpdateSchedule: after extraction", 
+			"req.ScheduleName", req.ScheduleName, 
+			"req.Description", req.Description)
 	}
 
 	// IMPORTANTE: Eliminar SleepInfos antiguos ANTES de crear los nuevos
