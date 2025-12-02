@@ -11,6 +11,7 @@ import type {
   NamespaceScheduleRequest,
   NamespaceScheduleResponse,
 } from '@/types'
+import { authService } from './auth'
 
 // Use relative path when in production (no VITE_API_URL set), otherwise use configured URL
 const API_BASE_URL = import.meta.env.VITE_API_URL || '/api'
@@ -27,10 +28,13 @@ class ApiClient {
       timeout: 30000,
     })
 
-    // Request interceptor
+    // Request interceptor - Add token automatically
     this.client.interceptors.request.use(
-      (config) => {
-        // Add auth headers if needed
+      async (config) => {
+        const token = authService.getAccessToken()
+        if (token && authService.isAuthenticated()) {
+          config.headers.Authorization = `Bearer ${token}`
+        }
         return config
       },
       (error) => {
@@ -38,10 +42,31 @@ class ApiClient {
       }
     )
 
-    // Response interceptor
+    // Response interceptor - Handle 401 and refresh token
     this.client.interceptors.response.use(
       (response) => response,
-      (error) => {
+      async (error) => {
+        const originalRequest = error.config
+
+        // If 401 and not a retry, try to refresh token
+        if (error.response?.status === 401 && !originalRequest._retry) {
+          originalRequest._retry = true
+
+          try {
+            const newToken = await authService.refreshToken()
+            originalRequest.headers.Authorization = `Bearer ${newToken}`
+            return this.client(originalRequest)
+          } catch (refreshError) {
+            // If refresh fails, logout and redirect to login
+            authService.logout()
+            // Only redirect if we're in browser (not SSR)
+            if (typeof window !== 'undefined') {
+              window.location.href = '/login'
+            }
+            return Promise.reject(refreshError)
+          }
+        }
+
         if (error.response?.status === 404) {
           console.error('Resource not found:', error.config?.url)
         } else if (error.response?.status >= 500) {
