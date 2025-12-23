@@ -508,3 +508,5 @@ kubectl get hdfscluster <nombre> -o jsonpath='{.spec}' | jq
 Una vez aprobado este plan, procederé con la implementación comenzando por el módulo `crddetector` y luego integrando la lógica en el flujo de Sleep/Wake.
 
 
+
+

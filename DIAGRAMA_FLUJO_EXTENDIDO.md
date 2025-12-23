@@ -377,3 +377,5 @@ SleepInfo único:
 4. **Extensibilidad**: Nuevos CRDs = solo agregar a la lista de configuración
 
 
+
+
