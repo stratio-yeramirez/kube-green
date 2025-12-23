@@ -1,6 +1,6 @@
 {
   "name": "kube-green-frontend",
-  "version": "0.7.1",
+  "version": "0.7.19",
   "private": true,
   "type": "module",
   "scripts": {
@@ -38,4 +38,3 @@
     "vite": "^5.0.8"
   }
 }
-

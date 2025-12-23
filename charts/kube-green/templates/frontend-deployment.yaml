@@ -1,0 +1,76 @@
+{{- if .Values.frontend.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kube-green.frontend.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-green.frontend.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.frontend.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "kube-green.frontend.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kube-green.frontend.selectorLabels" . | nindent 8 }}
+      {{- with .Values.frontend.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: frontend
+        image: {{ include "image" .Values.frontend.image }}
+        imagePullPolicy: {{ .Values.frontend.image.pullPolicy }}
+        env:
+        - name: API_SERVICE_NAME
+          value: {{ default (printf "%s-api" (include "kube-green.fullname" .)) .Values.frontend.env.apiServiceName | quote }}
+        - name: API_SERVICE_PORT
+          value: {{ default "8080" .Values.frontend.env.apiServicePort | quote }}
+        ports:
+        - containerPort: {{ .Values.frontend.containerPort }}
+          name: http
+          protocol: TCP
+        {{- if .Values.frontend.resources }}
+        resources:
+        {{ toYaml .Values.frontend.resources | nindent 10 }}
+        {{- end }}
+        {{- if .Values.frontend.securityContext }}
+        securityContext:
+        {{ toYaml .Values.frontend.securityContext | nindent 10 }}
+        {{- end }}
+        {{- if and .Values.frontend.livenessProbe.enabled .Values.frontend.livenessProbe.path }}
+        livenessProbe:
+          httpGet:
+            path: {{ .Values.frontend.livenessProbe.path }}
+            port: {{ .Values.frontend.containerPort }}
+          initialDelaySeconds: {{ .Values.frontend.livenessProbe.initialDelaySeconds }}
+          periodSeconds: {{ .Values.frontend.livenessProbe.periodSeconds }}
+        {{- end }}
+        {{- if and .Values.frontend.readinessProbe.enabled .Values.frontend.readinessProbe.path }}
+        readinessProbe:
+          httpGet:
+            path: {{ .Values.frontend.readinessProbe.path }}
+            port: {{ .Values.frontend.containerPort }}
+          initialDelaySeconds: {{ .Values.frontend.readinessProbe.initialDelaySeconds }}
+          periodSeconds: {{ .Values.frontend.readinessProbe.periodSeconds }}
+        {{- end }}
+      {{- with .Values.frontend.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.frontend.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.frontend.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

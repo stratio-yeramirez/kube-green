@@ -31,6 +31,13 @@ Create chart name and version as used by the chart label.
 {{- end }}
 
 {{/*
+Create a default fully qualified name for the frontend.
+*/}}
+{{- define "kube-green.frontend.fullname" -}}
+{{- printf "%s-frontend" (include "kube-green.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
 Common labels
 */}}
 {{- define "kube-green.labels" -}}
@@ -43,11 +50,27 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
 {{/*
+Frontend labels
+*/}}
+{{- define "kube-green.frontend.labels" -}}
+{{ include "kube-green.labels" . }}
+app.kubernetes.io/component: frontend
+{{- end }}
+
+{{/*
 Selector labels
 */}}
 {{- define "kube-green.selectorLabels" -}}
 app.kubernetes.io/name: {{ include "kube-green.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+
+{{/*
+Frontend selector labels
+*/}}
+{{- define "kube-green.frontend.selectorLabels" -}}
+{{ include "kube-green.selectorLabels" . }}
+app.kubernetes.io/component: frontend
 {{- end }}
 
 {{/*

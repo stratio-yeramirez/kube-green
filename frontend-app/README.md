@@ -66,13 +66,13 @@ npm run preview
 ### Construir Imagen
 
 ```bash
-docker build -t yeramirez/kube-front:0.7.1-front .
+docker build --build-arg VITE_AUTH_ENABLED=true -t yeramirez/kube-front:0.7.19 .
 ```
 
 ### Ejecutar Localmente
 
 ```bash
-docker run -p 8080:80 yeramirez/kube-front:0.7.1-front
+docker run -p 8080:80 yeramirez/kube-front:0.7.19
 ```
 
 ## ☸️ Kubernetes Deployment
@@ -104,6 +104,7 @@ El frontend estará disponible según la configuración del Ingress:
 
 - **Producción**: `.env.production`
   - `VITE_API_URL=http://kube-green-controller-manager-metrics-service.keos-core.svc.cluster.local:8080`
+  - `VITE_AUTH_ENABLED=true` (solo aplica en build)
 
 ## 📝 Features Implementadas
 
@@ -130,7 +131,7 @@ El frontend estará disponible según la configuración del Ingress:
 Las imágenes Docker siguen el patrón:
 - `yeramirez/kube-front:{VERSION}-front`
 
-Ejemplo: `yeramirez/kube-front:0.7.1-front`
+Ejemplo: `yeramirez/kube-front:0.7.19-front`
 
 ## 🔗 Integración con Backend
 
@@ -141,6 +142,5 @@ El frontend se comunica con el backend REST API de kube-green en:
 ## 📚 Documentación
 
 Ver `frontend/PLAN_FRONTEND.md` para el plan completo de implementación.
-
 
 

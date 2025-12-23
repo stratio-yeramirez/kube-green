@@ -11,7 +11,7 @@ manager:
     # -- Defines the image pull policy. Avoids pulling the image if it's already present.
     pullPolicy: IfNotPresent
     # -- The specific image tag of the kube-green manager to use.
-    tag: "0.7.16-backend-46558d9"
+    tag: "0.7.19"
   # -- Extra arguments to pass to the manager container.
   extraArgs: []
     # - --sleep-delta=60
@@ -76,6 +76,79 @@ manager:
     jwtSecretName: "kube-green-jwt"
     # -- Secret name containing user credentials (key: users)
     usersSecretName: "kube-green-users"
+
+# -- Frontend configuration
+frontend:
+  # -- Enable the web frontend deployment
+  enabled: false
+  # -- Number of replicas for the frontend
+  replicaCount: 2
+  # -- Frontend container port
+  containerPort: 80
+  image:
+    # -- The Docker image repository for the frontend application.
+    repository: yeramirez/kube-front
+    # -- Defines the image pull policy. Avoids pulling the image if it's already present.
+    pullPolicy: IfNotPresent
+    # -- The specific image tag of the frontend to use.
+    tag: "0.7.19"
+  env:
+    # -- Backend service name for the frontend proxy (nginx)
+    apiServiceName: ""
+    # -- Backend service port for the frontend proxy (nginx)
+    apiServicePort: "8080"
+  service:
+    # -- Service type for the frontend
+    type: ClusterIP
+    # -- Service port for the frontend
+    port: 80
+    # -- Target port for the frontend container
+    targetPort: 80
+    # -- Additional annotations for the frontend service
+    annotations: {}
+  ingress:
+    # -- Enable ingress for the frontend
+    enabled: false
+    # -- Ingress class name
+    className: ""
+    # -- Ingress annotations
+    annotations: {}
+    # -- Ingress hosts configuration
+    hosts:
+      - host: kube-green.local
+        paths:
+          - path: /
+            pathType: Prefix
+    # -- Ingress TLS configuration
+    tls: []
+  livenessProbe:
+    enabled: true
+    path: /
+    initialDelaySeconds: 30
+    periodSeconds: 10
+  readinessProbe:
+    enabled: true
+    path: /
+    initialDelaySeconds: 10
+    periodSeconds: 5
+  # -- Frontend resources
+  resources:
+    requests:
+      memory: 64Mi
+      cpu: 50m
+    limits:
+      memory: 128Mi
+      cpu: 100m
+  # -- Frontend security context
+  securityContext: {}
+  # -- Frontend pod annotations
+  podAnnotations: {}
+  # -- Frontend node selector
+  nodeSelector: {}
+  # -- Frontend tolerations
+  tolerations: []
+  # -- Frontend affinity
+  affinity: {}
 
 # -- List of secrets used to access private image repositories.
 imagePullSecrets: []

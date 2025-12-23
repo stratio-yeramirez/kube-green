@@ -548,6 +548,11 @@ python3 tenant_power.py show --help
 
 This fork includes a comprehensive REST API for managing schedules programmatically, with authentication and role-based access control.
 
+Additional API capabilities:
+- **Overlap validation**: Blocks create/update when schedules overlap in the same namespace (timezone-aware)
+- **Schedule name metadata**: Persisted via annotations for multi-schedule namespaces
+- **Delete by schedule name**: Allows targeting a single schedule without deleting the entire tenant
+
 ### API Features
 
 - **JWT Authentication**: Secure token-based authentication
@@ -737,7 +742,9 @@ This fork includes a modern React-based web frontend for managing schedules thro
 
 - **Authentication UI**: Login page with JWT support
 - **Dashboard**: Overview of all tenants and schedules
-- **Schedule Management**: Create, edit, and delete schedules
+- **Schedule Management**: Create, edit, and delete schedules (por tenant o por namespace)
+- **Tenant Grouping**: Agrupa schedules por tenant con vistas separadas por schedule
+- **Schedule-Level Actions**: Edición y eliminación por schedule específico
 - **User Management**: Admin panel for managing users (admin role only)
 - **Role-Based UI**: Interface adapts based on user role
 - **Real-time Updates**: Shows suspended services and next operations
@@ -827,6 +834,29 @@ docker push your-registry/kube-green:latest
 
 # Deploy using Helm or Kustomize
 # (See official kube-green documentation)
+```
+
+Example Helm values for API + frontend:
+
+```yaml
+manager:
+  api:
+    enabled: true
+    port: 8080
+    cors: true
+  auth:
+    enabled: true
+    jwtSecretName: kube-green-jwt
+    usersSecretName: kube-green-users
+
+frontend:
+  enabled: true
+  image:
+    repository: yeramirez/kube-front
+    tag: "0.7.19"
+  env:
+    apiServiceName: ""
+    apiServicePort: "8080"
 ```
 
 4. **Configure environment variables:**

@@ -4,7 +4,7 @@ Este documento mantiene el registro de versiones y cambios de este fork personal
 
 ---
 
-## [0.7.18] - 2025-12-22
+## [0.7.19] - 2025-12-23
 
 ### ✨ Nuevas Funcionalidades
 
@@ -22,20 +22,13 @@ Este documento mantiene el registro de versiones y cambios de este fork personal
   - Actualización de CRD y RBAC para `osdashboardses`.
   - Archivos modificados: `api/v1alpha1/sleepinfo_types.go`, `api/v1alpha1/defaultpatches.go`, `config/crd/bases/kube-green.com_sleepinfos.yaml`, `charts/kube-green/templates/crds/sleepinfo.yaml`, `charts/kube-green/templates/cluster_role.yaml`, `internal/controller/sleepinfo/jsonpatch/jsonpatch.go`
 
-### ✅ Resultado
+- **Eliminar por scheduleName**:
+  - Se permite eliminar un schedule específico (y opcionalmente por namespace) sin borrar el tenant completo.
+  - Archivos modificados: `internal/api/v1/schedule_service.go`, `internal/api/v1/handlers.go`
 
-- La API evita solapamientos que podrían corromper el estado original de réplicas.
-- Errores más accionables para equipos que automatizan la creación de schedules.
-- OsDashboards puede ser apagado/encendido de forma controlada.
-
-### 📦 Imagen Docker
-
-- **Repositorio**: `yeramirez/kube-green:0.7.16-backend-6e7e00b2`
-- **Fecha de publicación**: 2025-12-22
-
----
-
-## [0.7.18] - 2025-12-23
+- **Frontend con agrupación por tenant y acciones por schedule**:
+  - Agrupa schedules por tenant, permite editar por namespace y eliminar por schedule.
+  - Archivos modificados: `frontend-app/src/components/TenantDetail/TenantDetail.tsx`, `frontend-app/src/components/ScheduleEditor/ScheduleEditor.tsx`, `frontend-app/src/services/api.ts`, `frontend-app/src/hooks/useTenants.ts`
 
 ### 🐛 Correcciones
 
@@ -50,12 +43,15 @@ Este documento mantiene el registro de versiones y cambios de este fork personal
 
 ### ✅ Resultado
 
-- Login responde correctamente y ya no se queda esperando.
-- Actualización de contraseña completa sin bloqueo.
+- La API evita solapamientos y permite eliminar schedules específicos.
+- Errores más accionables para equipos que automatizan la creación de schedules.
+- OsDashboards puede ser apagado/encendido de forma controlada.
+- Frontend más claro para edición por schedule y namespace.
 
 ### 📦 Imagen Docker
 
-- **Repositorio**: `yeramirez/kube-green:0.7.16-backend-6e7e00b4`
+- **Backend**: `yeramirez/kube-green:0.7.19`
+- **Frontend**: `yeramirez/kube-front:0.7.19`
 - **Fecha de publicación**: 2025-12-23
 
 ---

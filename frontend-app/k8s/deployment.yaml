@@ -24,7 +24,7 @@ spec:
     spec:
       containers:
       - name: frontend
-        image: yeramirez/kube-front:0.7.9-frontend-d5d6c66
+        image: yeramirez/kube-front:0.7.19
         imagePullPolicy: Always
         env:
         - name: API_SERVICE_NAME

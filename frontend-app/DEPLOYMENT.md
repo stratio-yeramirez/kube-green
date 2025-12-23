@@ -12,13 +12,13 @@
 
 ```bash
 cd frontend-app
-docker build -t yeramirez/kube-front:0.7.1-front .
+docker build --build-arg VITE_AUTH_ENABLED=true -t yeramirez/kube-front:0.7.19 .
 ```
 
 ### 2. Subir la Imagen al Registry
 
 ```bash
-docker push yeramirez/kube-front:0.7.1-front
+docker push yeramirez/kube-front:0.7.19
 ```
 
 ### 3. Verificar Namespace keos-core
@@ -76,13 +76,13 @@ Para actualizar el deployment con una nueva versión:
 
 ```bash
 # 1. Construir nueva imagen
-docker build -t yeramirez/kube-front:0.7.2-front .
+docker build --build-arg VITE_AUTH_ENABLED=true -t yeramirez/kube-front:0.7.19 .
 
 # 2. Subir al registry
-docker push yeramirez/kube-front:0.7.2-front
+docker push yeramirez/kube-front:0.7.19
 
 # 3. Actualizar deployment
-kubectl set image deployment/kube-green-frontend frontend=yeramirez/kube-front:0.7.2-front -n keos-core
+kubectl set image deployment/kube-green-frontend frontend=yeramirez/kube-front:0.7.19 -n keos-core
 
 # 4. Verificar rollout
 kubectl rollout status deployment/kube-green-frontend -n keos-core
@@ -116,6 +116,5 @@ Si necesitas hacer rollback:
 ```bash
 kubectl rollout undo deployment/kube-green-frontend -n keos-core
 ```
-
 
 
