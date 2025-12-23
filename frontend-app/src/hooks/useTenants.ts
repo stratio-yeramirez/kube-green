@@ -5,10 +5,12 @@ import type {
   Schedule, 
   CreateScheduleRequest, 
   SuspendedServicesResponse, 
+  SuspendedService,
   ApiResponse,
   NamespaceResourceInfo,
   NamespaceScheduleRequest,
   NamespaceScheduleResponse,
+  NextOperationResponse,
 } from '@/types'
 
 // Query keys
@@ -24,7 +26,11 @@ export const queryKeys = {
   resources: (tenant: string, namespace: string) =>
     ['resources', tenant, namespace] as const,
   suspended: (tenant: string) => ['suspended', tenant] as const,
+  nextOperation: (tenant: string) => ['nextOperation', tenant] as const,
+  allSuspended: ['allSuspended'] as const,
+  allNextOperations: ['allNextOperations'] as const,
   allSchedules: ['allSchedules'] as const,
+  users: ['users'] as const,
 }
 
 // Hook: Get all schedules (for filtering tenants with active schedules)
@@ -41,7 +47,9 @@ export function useTenants() {
   return useQuery({
     queryKey: queryKeys.tenants,
     queryFn: () => apiClient.getTenants(),
-    staleTime: 60000, // 1 minute
+    staleTime: 10000, // 10 seconds - shorter cache to ensure fresh data
+    refetchOnMount: true, // Always refetch when component mounts
+    refetchOnWindowFocus: true, // Refetch when window gains focus
   })
 }
 
@@ -51,7 +59,9 @@ export function useSchedules(tenant: string, namespace?: string) {
     queryKey: queryKeys.schedules(tenant, namespace),
     queryFn: () => apiClient.getSchedules(tenant, namespace),
     enabled: !!tenant,
-    staleTime: 30000, // 30 seconds
+    staleTime: 0, // Always consider stale to ensure fresh data after updates
+    refetchOnMount: true, // Always refetch when component mounts
+    refetchOnWindowFocus: true, // Refetch when window gains focus
   })
 }
 
@@ -95,6 +105,34 @@ export function useSuspendedServices(tenant: string) {
   })
 }
 
+// Hook: Get next scheduled operation
+export function useNextOperation(tenant: string) {
+  return useQuery({
+    queryKey: queryKeys.nextOperation(tenant),
+    queryFn: () => apiClient.getNextOperation(tenant),
+    enabled: !!tenant,
+    refetchInterval: 60000, // Refresh every minute
+  })
+}
+
+// Hook: Get all suspended services (aggregate)
+export function useAllSuspendedServices() {
+  return useQuery({
+    queryKey: queryKeys.allSuspended,
+    queryFn: () => apiClient.getAllSuspendedServices(),
+    refetchInterval: 30000, // Refresh every 30 seconds
+  })
+}
+
+// Hook: Get next operation across all tenants (aggregate)
+export function useAllNextOperations() {
+  return useQuery({
+    queryKey: queryKeys.allNextOperations,
+    queryFn: () => apiClient.getAllNextOperations(),
+    refetchInterval: 60000, // Refresh every minute
+  })
+}
+
 // Hook: Create schedule
 export function useCreateSchedule() {
   const queryClient = useQueryClient()
@@ -116,8 +154,15 @@ export function useUpdateSchedule() {
   return useMutation({
     mutationFn: ({ tenant, request }: { tenant: string; request: CreateScheduleRequest }) =>
       apiClient.updateSchedule(tenant, request),
-    onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.schedules(variables.tenant) })
+    onSuccess: async (_, variables) => {
+      // Invalidar todas las queries relacionadas
+      await queryClient.invalidateQueries({ queryKey: queryKeys.schedules(variables.tenant) })
+      await queryClient.invalidateQueries({ queryKey: queryKeys.allSchedules })
+      await queryClient.invalidateQueries({ queryKey: queryKeys.tenants })
+      
+      // Forzar refetch de todas las queries relacionadas
+      await queryClient.refetchQueries({ queryKey: queryKeys.schedules(variables.tenant) })
+      await queryClient.refetchQueries({ queryKey: queryKeys.allSchedules })
     },
   })
 }
@@ -127,8 +172,15 @@ export function useDeleteSchedule() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: ({ tenant, namespace }: { tenant: string; namespace?: string }) =>
-      apiClient.deleteSchedule(tenant, namespace),
+    mutationFn: ({
+      tenant,
+      namespace,
+      scheduleName,
+    }: {
+      tenant: string
+      namespace?: string
+      scheduleName?: string
+    }) => apiClient.deleteSchedule(tenant, namespace, scheduleName),
     onSuccess: (_, variables) => {
       // Invalidate all relevant queries to refresh the UI
       queryClient.invalidateQueries({ queryKey: queryKeys.tenants })
@@ -184,4 +236,3 @@ export function useDeleteNamespaceSchedule() {
     },
   })
 }
-

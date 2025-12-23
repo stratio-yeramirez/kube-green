@@ -6,6 +6,7 @@ import Dashboard from './components/Dashboard/Dashboard'
 import TenantDetail from './components/TenantDetail/TenantDetail'
 import ScheduleEditor from './components/ScheduleEditor/ScheduleEditor'
 import SuspendedServices from './components/SuspendedServices/SuspendedServices'
+import UserManagement from './components/UserManagement/UserManagement'
 import Login from './components/Login/Login'
 
 function App() {
@@ -13,17 +14,20 @@ function App() {
   const authEnabled = import.meta.env.VITE_AUTH_ENABLED === 'true'
 
   if (!authEnabled) {
-    // If auth is disabled, render without protection
+    // If auth is disabled, render without protection but still wrap in AuthProvider
     return (
-      <Layout>
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/tenant/:tenantName" element={<TenantDetail />} />
-          <Route path="/schedule/new" element={<ScheduleEditor />} />
-          <Route path="/schedule/edit/:tenantName" element={<ScheduleEditor />} />
-          <Route path="/suspended" element={<SuspendedServices />} />
-        </Routes>
-      </Layout>
+      <AuthProvider>
+        <Layout>
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/tenant/:tenantName" element={<TenantDetail />} />
+            <Route path="/schedule/new" element={<ScheduleEditor />} />
+            <Route path="/schedule/edit/:tenantName" element={<ScheduleEditor />} />
+            <Route path="/suspended" element={<SuspendedServices />} />
+            <Route path="/users" element={<UserManagement />} />
+          </Routes>
+        </Layout>
+      </AuthProvider>
     )
   }
 
@@ -43,6 +47,7 @@ function App() {
                   <Route path="/schedule/new" element={<ScheduleEditor />} />
                   <Route path="/schedule/edit/:tenantName" element={<ScheduleEditor />} />
                   <Route path="/suspended" element={<SuspendedServices />} />
+                  <Route path="/users" element={<UserManagement />} />
                 </Routes>
               </Layout>
             </ProtectedRoute>

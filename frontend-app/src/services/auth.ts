@@ -25,6 +25,7 @@ class AuthServiceImpl implements AuthService {
   private readonly REFRESH_TOKEN_KEY = 'kube-green-refresh-token'
   private readonly EXPIRES_AT_KEY = 'kube-green-expires-at'
   private readonly USERNAME_KEY = 'kube-green-username'
+  private readonly ROLE_KEY = 'kube-green-role'
   
   // Use localStorage by default, but allow switching to sessionStorage
   private storage: Storage = localStorage
@@ -53,6 +54,7 @@ class AuthServiceImpl implements AuthService {
     this.storage.removeItem(this.REFRESH_TOKEN_KEY)
     this.storage.removeItem(this.EXPIRES_AT_KEY)
     this.storage.removeItem(this.USERNAME_KEY)
+    this.storage.removeItem(this.ROLE_KEY)
   }
 
   async refreshToken(): Promise<string> {
@@ -70,6 +72,11 @@ class AuthServiceImpl implements AuthService {
     if (response.data.success && response.data.data) {
       const username = this.storage.getItem(this.USERNAME_KEY) || ''
       this.setTokens(response.data.data, username)
+      // Update role from new token
+      const decoded = this.decodeToken(response.data.data.accessToken)
+      if (decoded?.role) {
+        this.storage.setItem(this.ROLE_KEY, decoded.role)
+      }
       return response.data.data.accessToken
     }
 
@@ -86,6 +93,42 @@ class AuthServiceImpl implements AuthService {
 
   getUsername(): string | null {
     return this.storage.getItem(this.USERNAME_KEY)
+  }
+
+  getRole(): string | null {
+    // First try to get from storage
+    let role = this.storage.getItem(this.ROLE_KEY)
+    
+    // If not in storage, try to decode from token
+    if (!role) {
+      const token = this.getAccessToken()
+      if (token) {
+        const decoded = this.decodeToken(token)
+        if (decoded?.role) {
+          role = decoded.role
+          this.storage.setItem(this.ROLE_KEY, role)
+        }
+      }
+    }
+    
+    return role
+  }
+
+  // Decode JWT token to extract role
+  private decodeToken(token: string): { username?: string; role?: string } | null {
+    try {
+      const base64Url = token.split('.')[1]
+      const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/')
+      const jsonPayload = decodeURIComponent(
+        atob(base64)
+          .split('')
+          .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+          .join('')
+      )
+      return JSON.parse(jsonPayload)
+    } catch (error) {
+      return null
+    }
   }
 
   isAuthenticated(): boolean {
@@ -109,6 +152,12 @@ class AuthServiceImpl implements AuthService {
     const expiresAt = Date.now() + (data.expiresIn * 1000)
     this.storage.setItem(this.EXPIRES_AT_KEY, expiresAt.toString())
     this.storage.setItem(this.USERNAME_KEY, username)
+    
+    // Decode token to get role
+    const decoded = this.decodeToken(data.accessToken)
+    if (decoded?.role) {
+      this.storage.setItem(this.ROLE_KEY, decoded.role)
+    }
   }
 }
 

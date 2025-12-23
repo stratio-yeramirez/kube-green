@@ -4,9 +4,14 @@ import { authService, LoginRequest } from '@/services/auth'
 interface AuthContextType {
   isAuthenticated: boolean
   username: string | null
+  role: string | null
   login: (credentials: LoginRequest) => Promise<void>
   logout: () => void
   isLoading: boolean
+  isAdmin: () => boolean
+  canManageUsers: () => boolean
+  canCreateSchedule: () => boolean
+  canDeleteSchedule: () => boolean
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
@@ -26,6 +31,7 @@ interface AuthProviderProps {
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [username, setUsername] = useState<string | null>(null)
+  const [role, setRole] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
 
   useEffect(() => {
@@ -34,6 +40,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       const authenticated = authService.isAuthenticated()
       setIsAuthenticated(authenticated)
       setUsername(authService.getUsername())
+      // getRole() now decodes from token if not in storage
+      const userRole = authService.getRole()
+      setRole(userRole)
       setIsLoading(false)
     }
 
@@ -49,9 +58,11 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       await authService.login(credentials)
       setIsAuthenticated(true)
       setUsername(credentials.username)
+      setRole(authService.getRole())
     } catch (error) {
       setIsAuthenticated(false)
       setUsername(null)
+      setRole(null)
       throw error
     }
   }
@@ -60,10 +71,27 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     authService.logout()
     setIsAuthenticated(false)
     setUsername(null)
+    setRole(null)
   }
 
+  const isAdmin = () => role === 'admin'
+  const canManageUsers = () => role === 'admin'
+  const canCreateSchedule = () => role === 'admin' || role === 'operacion'
+  const canDeleteSchedule = () => role === 'admin' || role === 'operacion'
+
   return (
-    <AuthContext.Provider value={{ isAuthenticated, username, login, logout, isLoading }}>
+    <AuthContext.Provider value={{ 
+      isAuthenticated, 
+      username, 
+      role,
+      login, 
+      logout, 
+      isLoading,
+      isAdmin,
+      canManageUsers,
+      canCreateSchedule,
+      canDeleteSchedule,
+    }}>
       {children}
     </AuthContext.Provider>
   )

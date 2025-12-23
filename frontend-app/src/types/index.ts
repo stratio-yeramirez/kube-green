@@ -35,12 +35,14 @@ export interface Service {
 // Schedule Types
 export interface CreateScheduleRequest {
   tenant: string
+  scheduleName?: string // Optional: Custom name for the schedule (must be unique per tenant/namespace)
+  description?: string // Optional: Short description of the schedule
   userTimezone: string
   clusterTimezone: string
   off: string // HH:MM format
   on: string // HH:MM format
-  weekdays: string
-  wakeDays?: string
+  weekdaysSleep: string // Días de la semana para apagar (ej: "0-6", "1,3,5", "6")
+  weekdaysWake: string // Días de la semana para encender (ej: "0-6", "1,3,5", "6")
   namespaces: string[]
   delays?: DelayConfig
   exclusions?: Exclusion[]
@@ -168,6 +170,35 @@ export interface SuspendedService {
 export interface SuspendedServicesResponse {
   tenant: string
   suspended: SuspendedService[]
+}
+
+// Next Operation Types
+export interface NextOperationResponse {
+  tenant: string
+  operation: 'SLEEP' | 'WAKE_UP'
+  time: string
+  namespace?: string
+  description?: string
+}
+
+// User Management Types
+export interface UserInfo {
+  username: string
+  role: 'admin' | 'operacion' | 'lectura'
+}
+
+export interface CreateUserRequest {
+  username: string
+  password: string
+  role: 'admin' | 'operacion' | 'lectura'
+}
+
+export interface UpdatePasswordRequest {
+  password: string
+}
+
+export interface UpdateRoleRequest {
+  role: 'admin' | 'operacion' | 'lectura'
 }
 
 // Timezone Types

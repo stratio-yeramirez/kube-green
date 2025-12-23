@@ -6,10 +6,14 @@ import type {
   CreateScheduleRequest,
   Schedule,
   SuspendedServicesResponse,
+  SuspendedService,
   TimezoneConversion,
   NamespaceResourceInfo,
   NamespaceScheduleRequest,
   NamespaceScheduleResponse,
+  NextOperationResponse,
+  UserInfo,
+  CreateUserRequest,
 } from '@/types'
 import { authService } from './auth'
 
@@ -135,10 +139,16 @@ class ApiClient {
   }
 
   // Delete schedule
-  async deleteSchedule(tenant: string, namespace?: string): Promise<void> {
-    const url = namespace
-      ? `/schedules/${tenant}?namespace=${namespace}`
-      : `/schedules/${tenant}`
+  async deleteSchedule(tenant: string, namespace?: string, scheduleName?: string): Promise<void> {
+    const params = new URLSearchParams()
+    if (namespace) {
+      params.set('namespace', namespace)
+    }
+    if (scheduleName) {
+      params.set('scheduleName', scheduleName)
+    }
+    const query = params.toString()
+    const url = query ? `/schedules/${tenant}?${query}` : `/schedules/${tenant}`
     await this.client.delete<ApiResponse<void>>(url)
   }
 
@@ -180,6 +190,52 @@ class ApiClient {
     return response.data.data
   }
 
+  // Get next scheduled operation
+  async getNextOperation(tenant: string): Promise<NextOperationResponse> {
+    const response = await this.client.get<ApiResponse<NextOperationResponse>>(
+      `/schedules/${tenant}/next`
+    )
+    return response.data.data
+  }
+
+  // Get all suspended services (aggregate across all tenants)
+  async getAllSuspendedServices(): Promise<SuspendedService[]> {
+    const response = await this.client.get<ApiResponse<SuspendedService[]>>(
+      `/schedules/suspended`
+    )
+    return response.data.data || []
+  }
+
+  // Get next operation across all tenants
+  async getAllNextOperations(): Promise<NextOperationResponse> {
+    const response = await this.client.get<ApiResponse<NextOperationResponse>>(
+      `/schedules/next`
+    )
+    return response.data.data
+  }
+
+  // User management endpoints (admin only)
+  async listUsers(): Promise<UserInfo[]> {
+    const response = await this.client.get<ApiResponse<UserInfo[]>>('/users')
+    return response.data.data || []
+  }
+
+  async createUser(request: CreateUserRequest): Promise<void> {
+    await this.client.post<ApiResponse<void>>('/users', request)
+  }
+
+  async updateUserPassword(username: string, password: string): Promise<void> {
+    await this.client.put<ApiResponse<void>>(`/users/${username}/password`, { password })
+  }
+
+  async updateUserRole(username: string, role: string): Promise<void> {
+    await this.client.put<ApiResponse<void>>(`/users/${username}/role`, { role })
+  }
+
+  async deleteUser(username: string): Promise<void> {
+    await this.client.delete<ApiResponse<void>>(`/users/${username}`)
+  }
+
   // Convert timezone
   async convertTimezone(
     time: string,
@@ -199,4 +255,3 @@ class ApiClient {
 }
 
 export const apiClient = new ApiClient()
-
