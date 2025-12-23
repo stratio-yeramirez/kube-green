@@ -7,11 +7,11 @@ fullnameOverride: ""
 manager:
   image:
     # -- The Docker image repository for the kube-green manager application.
-    repository: kubegreen/kube-green
+    repository: yeramirez/kube-green
     # -- Defines the image pull policy. Avoids pulling the image if it's already present.
     pullPolicy: IfNotPresent
     # -- The specific image tag of the kube-green manager to use.
-    tag: "0.7.1"
+    tag: "0.7.16-backend-46558d9"
   # -- Extra arguments to pass to the manager container.
   extraArgs: []
     # - --sleep-delta=60
@@ -60,6 +60,22 @@ manager:
       metricRelabelings: []
       # -- Prometheus [RelabelConfigs] to apply to samples before scraping
       relabelings: []
+  # -- REST API configuration
+  api:
+    # -- Enable the REST API server
+    enabled: false
+    # -- Port for the REST API server
+    port: 8080
+    # -- Enable CORS for the REST API
+    cors: false
+  # -- Authentication configuration
+  auth:
+    # -- Enable JWT authentication for the REST API
+    enabled: false
+    # -- Secret name containing JWT secret (key: secret)
+    jwtSecretName: "kube-green-jwt"
+    # -- Secret name containing user credentials (key: users)
+    usersSecretName: "kube-green-users"
 
 # -- List of secrets used to access private image repositories.
 imagePullSecrets: []
@@ -117,6 +133,10 @@ rbac:
     name: kube-green-manager-role-custom-aggregate
     # -- Rules to add to the custom ClusterRole.
     rules: []
+  # -- Extended RBAC for CRDs (Postgres, HDFS, OpenSearch, Kafka)
+  extendedCRDs:
+    # -- Enable extended RBAC for CRDs (PgCluster, HDFSCluster, OsCluster, KafkaCluster, PgBouncer)
+    enabled: false
 
 crds:
   # This option decides if the CRDs should be installed as part of the Helm installation.

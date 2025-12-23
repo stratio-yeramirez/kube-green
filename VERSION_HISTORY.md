@@ -4,6 +4,136 @@ Este documento mantiene el registro de versiones y cambios de este fork personal
 
 ---
 
+## [0.7.18] - 2025-12-22
+
+### ✨ Nuevas Funcionalidades
+
+- **Validación de solapamiento de schedules**:
+  - Bloquea la creación/edición si el nuevo horario se solapa con otros schedules del mismo namespace (considerando timezone y conversión a UTC).
+  - Evita escenarios que pueden guardar `original=0` en recursos ya apagados por otro schedule.
+  - Archivos modificados: `internal/api/v1/schedule_service.go`, `internal/api/v1/handlers.go`
+
+- **Mensajes de error más claros para desarrolladores**:
+  - Errores detallados con tenant, schedule y namespaces afectados para facilitar ajustes en pipelines.
+  - Archivos modificados: `internal/api/v1/schedule_service.go`, `internal/api/v1/handlers.go`
+
+- **Soporte para OsDashboards**:
+  - Nuevo flag `suspendStatefulSetsOsDashboards` y patch de replicas.
+  - Actualización de CRD y RBAC para `osdashboardses`.
+  - Archivos modificados: `api/v1alpha1/sleepinfo_types.go`, `api/v1alpha1/defaultpatches.go`, `config/crd/bases/kube-green.com_sleepinfos.yaml`, `charts/kube-green/templates/crds/sleepinfo.yaml`, `charts/kube-green/templates/cluster_role.yaml`, `internal/controller/sleepinfo/jsonpatch/jsonpatch.go`
+
+### ✅ Resultado
+
+- La API evita solapamientos que podrían corromper el estado original de réplicas.
+- Errores más accionables para equipos que automatizan la creación de schedules.
+- OsDashboards puede ser apagado/encendido de forma controlada.
+
+### 📦 Imagen Docker
+
+- **Repositorio**: `yeramirez/kube-green:0.7.16-backend-6e7e00b2`
+- **Fecha de publicación**: 2025-12-22
+
+---
+
+## [0.7.18] - 2025-12-23
+
+### 🐛 Correcciones
+
+- **Login colgado en /api/v1/auth/login**:
+  - Se reemplazó `ShouldBindJSON` por un `json.Decoder` explícito para evitar bloqueos.
+  - Validación adicional de campos requeridos.
+  - Archivo modificado: `internal/api/v1/auth/handlers.go`
+
+- **Update password colgado (deadlock)**:
+  - Se liberó el lock antes de `saveUsers()` para evitar bloqueo por doble lock.
+  - Archivos modificados: `internal/api/v1/auth/users.go`
+
+### ✅ Resultado
+
+- Login responde correctamente y ya no se queda esperando.
+- Actualización de contraseña completa sin bloqueo.
+
+### 📦 Imagen Docker
+
+- **Repositorio**: `yeramirez/kube-green:0.7.16-backend-6e7e00b4`
+- **Fecha de publicación**: 2025-12-23
+
+---
+
+## [0.7.8] - 2025-01-19
+
+### 🐛 Correcciones Críticas
+
+- **Corrección del cálculo de DayShift en conversión de timezone**:
+  - **Problema**: Cuando una hora local (ej: sábado 20:58 Colombia) cruzaba el límite de día en UTC (domingo 01:58 UTC), el campo `weekdays` no se ajustaba correctamente, manteniendo el día original (sábado "6") en lugar del día UTC (domingo "0")
+  - **Causa**: El cálculo del `DayShift` usando `utcDate.Sub(localDate).Hours() / 24` no era confiable cuando las fechas estaban en diferentes zonas horarias
+  - **Solución**: Reimplementación del cálculo de `DayShift` usando `YearDay()` para comparar directamente los días calendario:
+    - Cuando local y UTC están en el mismo año: diferencia directa de `YearDay()`
+    - Cuando están en años diferentes (cerca de año nuevo): cálculo usando timestamps Unix
+  - **Resultado**: El `DayShift` ahora se calcula correctamente para cualquier día de la semana y cualquier hora que cruce el límite de día
+  - Archivo modificado: `internal/api/v1/timezone.go`
+
+### ✅ Resultado
+
+- **La conversión de timezone ahora funciona correctamente para todos los días de la semana**
+- Horas que cruzan el límite de día (ej: 19:00-23:59 Colombia) ahora ajustan correctamente el `weekdays` en UTC
+- Horas que no cruzan el límite (ej: 00:00-18:59 Colombia) mantienen el mismo día, como se espera
+- La función `ShiftWeekdaysStr` ya funcionaba correctamente; el problema estaba en el cálculo inicial del `DayShift`
+
+### 📦 Imagen Docker
+
+- **Repositorio**: `yeramirez/kube-green:0.7.8-rest-api`
+- **Digest**: `sha256:ce930b42ff4b79579ea812da0baeca4d7c1e1417c2314539b5e8f56ddb781e5a`
+- **Fecha de publicación**: 2025-01-19
+
+---
+
+## [0.7.6] - 2025-11-01
+
+### ✨ Nuevas Funcionalidades
+
+- **Filtro por namespace en todos los endpoints REST API**:
+  - **GET** `/api/v1/schedules/{tenant}`: Parámetro opcional `namespace` para filtrar por namespace específico
+  - **PUT** `/api/v1/schedules/{tenant}`: Parámetro opcional `namespace` para actualizar solo un namespace específico
+  - **DELETE** `/api/v1/schedules/{tenant}`: Parámetro opcional `namespace` para eliminar solo un namespace específico
+  - Si `namespace` está vacío o no se proporciona: opera sobre todos los namespaces del tenant
+  - Si `namespace` se proporciona (datastores, apps, rocket, intelligence, airflowsso): opera solo sobre ese namespace
+  - Archivos modificados: `internal/api/v1/handlers.go`, `internal/api/v1/schedule_service.go`
+
+- **Estructura de respuesta mejorada para GET schedules**:
+  - Nueva estructura `NamespaceInfo` con campos `schedule` (cronológicamente ordenado) y `summary` (resumen legible)
+  - Cada entrada del schedule incluye: `role` (sleep/wake), `operation` (descripción legible), `time`, `resources` (lista de recursos gestionados)
+  - Resumen ejecutivo con `sleepTime`, `wakeTime`, `operations` (lista de operaciones), `description` (descripción completa)
+  - Archivos modificados: `internal/api/v1/schedule_service.go`
+
+### 🔧 Mejoras
+
+- **Swagger UI mejorado**:
+  - Campos `tenant` y `namespace` ahora son campos de texto libre (sin dropdowns/Enums)
+  - Permite escribir cualquier tenant o namespace sin restricciones
+  - Descripciones mejoradas que explican el comportamiento con/sin namespace
+  - Archivos modificados: `internal/api/v1/handlers.go`, `internal/api/v1/doc.go`
+
+- **Validación de namespace**:
+  - Validación en backend para namespaces válidos cuando se proporciona el parámetro
+  - Mensajes de error claros indicando valores válidos
+  - Archivos: `internal/api/v1/handlers.go`, `internal/api/v1/schedule_service.go`
+
+### ✅ Resultado
+
+- API REST más flexible: permite operar sobre todo el tenant o namespace específico
+- Respuestas más legibles con estructura mejorada y resúmenes ejecutivos
+- Swagger UI más intuitivo con campos de texto libre
+- Soporte completo para operaciones por tenant y por tenant+namespace en GET, PUT, DELETE
+
+### 📦 Imagen Docker
+
+- **Repositorio**: `yeramirez/kube-green:0.7.6-rest-api`
+- **Digest**: `sha256:ce930b42ff4b79579ea812da0baeca4d7c1e1417c2314539b5e8f56ddb781e5a`
+- **Fecha de publicación**: 2025-11-01
+
+---
+
 ## [0.7.5] - 2025-11-01
 
 ### 🐛 Correcciones Críticas
@@ -137,4 +267,3 @@ Las versiones anteriores no llevaban un registro detallado. A partir de v0.7.3 s
 - ⚠️ **Cambios rompedores**: Cambios que requieren acción del usuario
 - 📦 **Despliegue**: Cambios relacionados con build/despliegue
 - ✅ **Resultado**: Efecto esperado de los cambios
-

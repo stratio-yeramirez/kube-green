@@ -1,0 +1,33 @@
+# Swagger documentation generation
+# Run: make swagger from the main Makefile
+
+.PHONY: swagger swagger-clean swagger-install
+
+SWAGGER_DIR := ./internal/api/v1
+SWAGGER_OUT := ./internal/api/v1/docs
+
+swagger-install:
+	@echo "Installing swag..."
+	@go install github.com/swaggo/swag/cmd/swag@latest
+
+swagger:
+	@echo "Generating Swagger documentation..."
+	@GOPATH_BIN=$$(go env GOPATH)/bin; \
+	if [ -f "$$GOPATH_BIN/swag" ]; then \
+		SWAG=$$GOPATH_BIN/swag; \
+	elif command -v swag > /dev/null 2>&1; then \
+		SWAG=swag; \
+	else \
+		echo "swag not found, installing..."; \
+		$(MAKE) swagger-install; \
+		SWAG=$$GOPATH_BIN/swag; \
+	fi; \
+	$$SWAG init -g doc.go -o $(SWAGGER_OUT) -d $(SWAGGER_DIR)
+	@echo "✓ Swagger documentation generated in $(SWAGGER_OUT)"
+	@echo "  Access Swagger UI at: http://localhost:8080/swagger/index.html"
+
+swagger-clean:
+	@echo "Cleaning Swagger documentation..."
+	@rm -rf $(SWAGGER_OUT)
+	@echo "✓ Swagger documentation cleaned"
+

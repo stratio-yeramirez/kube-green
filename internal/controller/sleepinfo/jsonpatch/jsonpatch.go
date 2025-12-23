@@ -14,6 +14,7 @@ import (
 	"github.com/go-logr/logr"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 var (
@@ -104,10 +105,10 @@ func (g managedResources) Sleep(ctx context.Context) error {
 			// Some examples are:
 			// - Pod managed by ReplicaSet managed by Deployment
 			// - Pod managed by Job managed by CronJob
-			// EXCEPCIÓN: No saltar CRDs (PgBouncer, PgCluster, HDFSCluster) aunque tengan ownerReferences,
+			// EXCEPCIÓN: No saltar CRDs (PgBouncer, PgCluster, HDFSCluster, OsCluster, OsDashboards, KafkaCluster) aunque tengan ownerReferences,
 			// ya que estos son recursos de nivel superior que debemos gestionar directamente.
 			resourceKind := resource.GetKind()
-			isCRD := resourceKind == "PgBouncer" || resourceKind == "PgCluster" || resourceKind == "HDFSCluster"
+			isCRD := resourceKind == "PgBouncer" || resourceKind == "PgCluster" || resourceKind == "HDFSCluster" || resourceKind == "OsCluster" || resourceKind == "OsDashboards" || resourceKind == "KafkaCluster"
 
 			if metav1.GetControllerOfNoCopy(&resource) != nil && !isCRD {
 				g.logger.Info("resource is managed by another controller, skipped",
@@ -118,11 +119,14 @@ func (g managedResources) Sleep(ctx context.Context) error {
 				continue
 			}
 
+			// CRITICAL: Save original state BEFORE attempting patch
+			// This ensures we always have the original state saved, even if patch fails
 			original, err := json.Marshal(resource.Object)
 			if err != nil {
 				return fmt.Errorf("%w: %s", ErrJSONPatch, err)
 			}
 
+			// Now attempt to apply the patch
 			modified, err := patcherFn.Exec(original)
 			if err != nil {
 				g.logger.Error(err, "fails to apply patch",
@@ -130,12 +134,70 @@ func (g managedResources) Sleep(ctx context.Context) error {
 					"resourceKind", resource.GetKind(),
 					"patch", resourceWrapper.patchData.Patch,
 				)
+				// CRITICAL: Even if patch fails, we need to save the original state
+				// The resource might have been modified in a previous attempt (e.g., replicas set to 0)
+				// We need to re-read the current state from cluster and create a restore patch
+				// that restores from current state to original state
+				currentResource := &unstructured.Unstructured{}
+				currentResource.SetGroupVersionKind(resource.GroupVersionKind())
+				currentResource.SetName(resource.GetName())
+				currentResource.SetNamespace(resource.GetNamespace())
+
+				// Re-read current state from cluster (might be modified from previous attempt)
+				if err := resourceWrapper.Client.Get(ctx, client.ObjectKeyFromObject(currentResource), currentResource); err != nil {
+					g.logger.Error(err, "failed to re-read resource after patch failure, using original state",
+						"resourceName", resource.GetName(),
+						"resourceKind", resource.GetKind(),
+					)
+					// If we can't re-read, create a restore patch from original to original (identity)
+					// This at least marks that we've seen this resource
+					identityPatch, _ := jsonpatch.CreateMergePatch(original, original)
+					if string(identityPatch) != "{}" {
+						resourceWrapper.restorePatches[resource.GetName()] = string(identityPatch)
+					}
+				} else {
+					// Re-read successful: create restore patch from current state to original
+					currentState, err := json.Marshal(currentResource.Object)
+					if err != nil {
+						g.logger.Error(err, "failed to marshal current resource state",
+							"resourceName", resource.GetName(),
+							"resourceKind", resource.GetKind(),
+						)
+						continue
+					}
+
+					// Create restore patch from current state (might be modified) to original state
+					restorePatchFromCurrent, err := jsonpatch.CreateMergePatch(currentState, original)
+					if err != nil {
+						g.logger.Error(err, "failed to create restore patch from current to original",
+							"resourceName", resource.GetName(),
+							"resourceKind", resource.GetKind(),
+						)
+						continue
+					}
+
+					restorePatchString := string(restorePatchFromCurrent)
+					// Only save if it's not empty (resource was actually modified)
+					if restorePatchString != "{}" {
+						resourceWrapper.restorePatches[resource.GetName()] = restorePatchString
+						g.logger.Info("saved restore patch from current state to original despite patch failure",
+							"resourceName", resource.GetName(),
+							"resourceKind", resource.GetKind(),
+						)
+					}
+				}
 				continue
 			}
 
+			// Patch succeeded: create proper restore patch (from modified back to original)
 			restorePatch, err := jsonpatch.CreateMergePatch(modified, original)
 			if err != nil {
-				return fmt.Errorf("%w: %s", ErrJSONPatch, err)
+				g.logger.Error(err, "failed to create restore patch, skipping resource",
+					"resourceName", resource.GetName(),
+					"resourceKind", resource.GetKind(),
+				)
+				// Continue with next resource instead of stopping entire operation
+				continue
 			}
 			restorePatchString := string(restorePatch)
 
@@ -145,16 +207,42 @@ func (g managedResources) Sleep(ctx context.Context) error {
 				continue
 			}
 
+			// CRITICAL: Save the restore patch BEFORE attempting SSAPatch
+			// This ensures we always have the restore patch saved, even if SSAPatch fails
+			// This protects against losing replica information
 			resourceWrapper.restorePatches[resource.GetName()] = restorePatchString
+			g.logger.Info("saved restore patch before applying SSAPatch",
+				"resourceName", resource.GetName(),
+				"resourceKind", resource.GetKind(),
+			)
 
 			res := &unstructured.Unstructured{}
 			if err := json.Unmarshal(modified, &res.Object); err != nil {
-				return fmt.Errorf("%w: %s", ErrJSONPatch, err)
+				g.logger.Error(err, "failed to marshal modified resource, skipping",
+					"resourceName", resource.GetName(),
+					"resourceKind", resource.GetKind(),
+				)
+				// Restore patch already saved, continue with next resource
+				continue
 			}
 
+			// Attempt to apply SSAPatch
 			if err := resourceWrapper.SSAPatch(ctx, res); err != nil {
-				return fmt.Errorf("%w: %s", ErrJSONPatch, err)
+				// CRITICAL: If SSAPatch fails, log error but continue with other resources
+				// The restore patch is already saved, so we can restore later
+				// This ensures that one failing resource doesn't stop the entire sleep/wake operation
+				g.logger.Error(err, "failed to apply SSAPatch, but restore patch is saved - continuing with other resources",
+					"resourceName", resource.GetName(),
+					"resourceKind", resource.GetKind(),
+					"restorePatchSaved", true,
+				)
+				// Continue with next resource instead of stopping entire operation
+				continue
 			}
+			g.logger.Info("SSAPatch applied successfully",
+				"resourceName", resource.GetName(),
+				"resourceKind", resource.GetKind(),
+			)
 			resourceWrapper.isCacheInvalid = true
 		}
 	}
@@ -179,10 +267,10 @@ func (g managedResources) WakeUp(ctx context.Context) error {
 
 		for _, resource := range resourceWrapper.data {
 			// Skip resources managed by another controller
-			// EXCEPCIÓN: No saltar CRDs (PgBouncer, PgCluster, HDFSCluster) aunque tengan ownerReferences,
+			// EXCEPCIÓN: No saltar CRDs (PgBouncer, PgCluster, HDFSCluster, OsCluster, OsDashboards, KafkaCluster) aunque tengan ownerReferences,
 			// ya que estos son recursos de nivel superior que debemos gestionar directamente.
 			resourceKind := resource.GetKind()
-			isCRD := resourceKind == "PgBouncer" || resourceKind == "PgCluster" || resourceKind == "HDFSCluster"
+			isCRD := resourceKind == "PgBouncer" || resourceKind == "PgCluster" || resourceKind == "HDFSCluster" || resourceKind == "OsCluster" || resourceKind == "OsDashboards" || resourceKind == "KafkaCluster"
 
 			if metav1.GetControllerOfNoCopy(&resource) != nil && !isCRD {
 				g.logger.Info("resource is managed by another controller, skipped",
@@ -198,10 +286,10 @@ func (g managedResources) WakeUp(ctx context.Context) error {
 				return fmt.Errorf("%w: %s", ErrJSONPatch, err)
 			}
 
-			// EXTENSIÓN PRIORITARIA: Para CRDs con patches dinámicos (PgCluster, HDFSCluster),
+			// EXTENSIÓN PRIORITARIA: Para CRDs con patches dinámicos (PgCluster, HDFSCluster, OsCluster, KafkaCluster),
 			// aplicar el patch de WAKE directamente sin verificar el restore patch.
 			// Estos patches están diseñados para ser aplicados siempre, independientemente del estado del restore patch.
-			isCRDWithDynamicPatch := resourceKind == "PgCluster" || resourceKind == "HDFSCluster"
+			isCRDWithDynamicPatch := resourceKind == "PgCluster" || resourceKind == "HDFSCluster" || resourceKind == "OsCluster" || resourceKind == "KafkaCluster"
 
 			if isCRDWithDynamicPatch && resourceWrapper.patchData.Patch != "" {
 				// Para CRDs con patches dinámicos, aplicar el patch directamente sin verificar restore patch
@@ -249,7 +337,13 @@ func (g managedResources) WakeUp(ctx context.Context) error {
 				}
 
 				if err := resourceWrapper.SSAPatch(ctx, res); err != nil {
-					return fmt.Errorf("%w: %s", ErrJSONPatch, err)
+					// CRITICAL: If SSAPatch fails, log error but continue with other resources
+					g.logger.Error(err, "failed to apply SSAPatch for CRD, continuing with other resources",
+						"resourceName", resource.GetName(),
+						"resourceKind", resourceKind,
+					)
+					// Continue with next resource instead of stopping entire operation
+					continue
 				}
 				g.logger.Info("dynamic patch applied successfully for wake",
 					"resourceName", resource.GetName(),
@@ -323,11 +417,22 @@ func (g managedResources) WakeUp(ctx context.Context) error {
 
 					res := &unstructured.Unstructured{}
 					if err := json.Unmarshal(modified, &res.Object); err != nil {
-						return fmt.Errorf("%w: %s", ErrJSONPatch, err)
+						g.logger.Error(err, "failed to unmarshal modified resource for wake, skipping",
+							"resourceName", resource.GetName(),
+							"resourceKind", resource.GetKind(),
+						)
+						// Continue with next resource instead of stopping entire operation
+						continue
 					}
 
 					if err := resourceWrapper.SSAPatch(ctx, res); err != nil {
-						return fmt.Errorf("%w: %s", ErrJSONPatch, err)
+						// CRITICAL: If SSAPatch fails, log error but continue with other resources
+						g.logger.Error(err, "failed to apply SSAPatch for wake, continuing with other resources",
+							"resourceName", resource.GetName(),
+							"resourceKind", resource.GetKind(),
+						)
+						// Continue with next resource instead of stopping entire operation
+						continue
 					}
 					g.logger.Info("patch applied successfully for wake (operator will restore replicas from spec)",
 						"resourceName", resource.GetName(),
@@ -366,12 +471,22 @@ func (g managedResources) WakeUp(ctx context.Context) error {
 
 			restored, err := jsonpatch.MergePatch(current, []byte(rawPatch))
 			if err != nil {
-				return fmt.Errorf("%w: %s", ErrJSONPatch, err)
+				g.logger.Error(err, "failed to merge restore patch, skipping resource",
+					"resourceName", resource.GetName(),
+					"resourceKind", resource.GetKind(),
+				)
+				// Continue with next resource instead of stopping entire operation
+				continue
 			}
 
 			res := &unstructured.Unstructured{}
 			if err := json.Unmarshal(restored, &res.Object); err != nil {
-				return fmt.Errorf("%w: %s", ErrJSONPatch, err)
+				g.logger.Error(err, "failed to unmarshal restored resource, skipping",
+					"resourceName", resource.GetName(),
+					"resourceKind", resource.GetKind(),
+				)
+				// Continue with next resource instead of stopping entire operation
+				continue
 			}
 
 			// Here we need to use Patch because SSA patch will not work for restore,
@@ -379,7 +494,13 @@ func (g managedResources) WakeUp(ctx context.Context) error {
 			// (the applied resources does not have the object removed, so SSA patch will not remove it.
 			// To work properly, the value of the object should be null)
 			if err := resourceWrapper.Patch(ctx, resource.DeepCopy(), res); err != nil {
-				return fmt.Errorf("%w: %s", ErrJSONPatch, err)
+				g.logger.Error(err, "failed to apply restore patch, but restore patch is saved - continuing with other resources",
+					"resourceName", resource.GetName(),
+					"resourceKind", resource.GetKind(),
+				)
+				// Continue with next resource instead of stopping entire operation
+				// The restore patch is already saved, so we can retry later
+				continue
 			}
 			resourceWrapper.isCacheInvalid = true
 		}
