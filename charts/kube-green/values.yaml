@@ -5,7 +5,7 @@ manager:
   image:
     repository: yeramirez/kube-green
     pullPolicy: IfNotPresent
-    tag: "0.7.16-backend-fix2"
+    tag: "0.7.19"
 
   extraArgs: []
 
