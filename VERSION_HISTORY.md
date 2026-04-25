@@ -4,7 +4,43 @@ Este documento mantiene el registro de versiones y cambios de este fork personal
 
 ---
 
-## [0.7.19] - 2025-12-23
+## [Unreleased] - 2025-12-26
+
+### 🐛 Correcciones Críticas
+
+- **UpdateSchedule preserva restore patches en edits**:
+  - **Problema**: Un edit de horarios eliminaba SleepInfos y secretos, perdiendo las replicas originales (restore patches).
+  - **Solución**: Cuando el edit mantiene `scheduleName` y namespaces, se preservan los SleepInfos existentes y se evita borrar secretos.
+  - **Resultado**: Cambios de hora (ej. mover wake de 7 a 9) no pierden réplicas y permiten encendido correcto.
+  - Archivo modificado: `internal/api/v1/schedule_service.go`
+- **Acción manual dispara reconciliación**:
+  - **Problema**: El controller filtraba updates por `GenerationChangedPredicate`, por lo que un update de anotaciones no ejecutaba el wake/sleep manual.
+  - **Solución**: Se permite reconciliar cuando cambia `kube-green.stratio.com/manual-action` o su timestamp.
+  - Archivo modificado: `internal/controller/sleepinfo/sleepinfo_controller.go`
+- **Preserva restore patches en WAKE**:
+  - **Problema**: Un WAKE actualizaba el secret y eliminaba `original-resource-info`.
+  - **Solución**: Mantener el restore existente si no es operación SLEEP.
+  - Archivo modificado: `internal/controller/sleepinfo/secrets.go`
+- **Habilita endpoints de namespaces**:
+  - **Problema**: El editor recibía 404 al cargar servicios/recursos por namespace.
+  - **Solución**: Se activan `/api/v1/namespaces/:tenant/services` y `/api/v1/namespaces/:tenant/resources`.
+  - Archivos modificados: `internal/api/v1/server.go`, `internal/api/v1/handlers.go`
+
+### ✨ Nuevas Funcionalidades
+
+- **Acción manual Sleep/Wake**:
+  - **Nuevo endpoint**: `POST /api/v1/schedules/{tenant}/manual`
+  - Permite ejecutar sleep/wake inmediato sin cambiar horarios.
+  - Archivos: `internal/api/v1/handlers.go`, `internal/api/v1/server.go`, `internal/api/v1/schedule_service.go`
+
+- **Restore de emergencia**:
+  - Se guarda un secret de respaldo `sleepinfo-restore-<name>` con `original-resource-info`.
+  - En WAKE, si el secret principal no tiene restore patches, se usa el respaldo.
+  - Archivos: `internal/controller/sleepinfo/secrets.go`, `internal/controller/sleepinfo/sleepinfo_controller.go`
+
+---
+
+## [0.7.18] - 2025-12-22
 
 ### ✨ Nuevas Funcionalidades
 
@@ -22,13 +58,20 @@ Este documento mantiene el registro de versiones y cambios de este fork personal
   - Actualización de CRD y RBAC para `osdashboardses`.
   - Archivos modificados: `api/v1alpha1/sleepinfo_types.go`, `api/v1alpha1/defaultpatches.go`, `config/crd/bases/kube-green.com_sleepinfos.yaml`, `charts/kube-green/templates/crds/sleepinfo.yaml`, `charts/kube-green/templates/cluster_role.yaml`, `internal/controller/sleepinfo/jsonpatch/jsonpatch.go`
 
-- **Eliminar por scheduleName**:
-  - Se permite eliminar un schedule específico (y opcionalmente por namespace) sin borrar el tenant completo.
-  - Archivos modificados: `internal/api/v1/schedule_service.go`, `internal/api/v1/handlers.go`
+### ✅ Resultado
 
-- **Frontend con agrupación por tenant y acciones por schedule**:
-  - Agrupa schedules por tenant, permite editar por namespace y eliminar por schedule.
-  - Archivos modificados: `frontend-app/src/components/TenantDetail/TenantDetail.tsx`, `frontend-app/src/components/ScheduleEditor/ScheduleEditor.tsx`, `frontend-app/src/services/api.ts`, `frontend-app/src/hooks/useTenants.ts`
+- La API evita solapamientos que podrían corromper el estado original de réplicas.
+- Errores más accionables para equipos que automatizan la creación de schedules.
+- OsDashboards puede ser apagado/encendido de forma controlada.
+
+### 📦 Imagen Docker
+
+- **Repositorio**: `yeramirez/kube-green:0.7.16-backend-6e7e00b2`
+- **Fecha de publicación**: 2025-12-22
+
+---
+
+## [0.7.18] - 2025-12-23
 
 ### 🐛 Correcciones
 
@@ -43,15 +86,12 @@ Este documento mantiene el registro de versiones y cambios de este fork personal
 
 ### ✅ Resultado
 
-- La API evita solapamientos y permite eliminar schedules específicos.
-- Errores más accionables para equipos que automatizan la creación de schedules.
-- OsDashboards puede ser apagado/encendido de forma controlada.
-- Frontend más claro para edición por schedule y namespace.
+- Login responde correctamente y ya no se queda esperando.
+- Actualización de contraseña completa sin bloqueo.
 
 ### 📦 Imagen Docker
 
-- **Backend**: `yeramirez/kube-green:0.7.19`
-- **Frontend**: `yeramirez/kube-front:0.7.19`
+- **Repositorio**: `yeramirez/kube-green:0.7.16-backend-6e7e00b4`
 - **Fecha de publicación**: 2025-12-23
 
 ---

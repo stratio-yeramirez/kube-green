@@ -29,8 +29,9 @@ type managedResources struct {
 }
 
 type RestorePatches map[string]string
+type SleptResourceGenerations map[string]int64
 
-func NewResources(ctx context.Context, res resource.ResourceClient, namespace string, restorePatches map[string]RestorePatches) (resource.Resource, error) {
+func NewResources(ctx context.Context, res resource.ResourceClient, namespace string, restorePatches map[string]RestorePatches, sleptGenerations map[string]SleptResourceGenerations) (resource.Resource, error) {
 	if res.SleepInfo == nil {
 		return nil, fmt.Errorf("%w: sleepInfo is not provided", ErrJSONPatch)
 	}
@@ -42,6 +43,9 @@ func NewResources(ctx context.Context, res resource.ResourceClient, namespace st
 	if restorePatches == nil {
 		restorePatches = map[string]RestorePatches{}
 	}
+	if sleptGenerations == nil {
+		sleptGenerations = map[string]SleptResourceGenerations{}
+	}
 
 	for _, patchData := range res.SleepInfo.GetPatches() {
 		res.Log.V(8).Info("patch data", "patch", patchData.Patch, "target", patchData.Target)
@@ -49,8 +53,12 @@ func NewResources(ctx context.Context, res resource.ResourceClient, namespace st
 		if !ok {
 			restorePatch = RestorePatches{}
 		}
+		resourceGenerations, ok := sleptGenerations[patchData.Target.String()]
+		if !ok {
+			resourceGenerations = SleptResourceGenerations{}
+		}
 
-		generic := newGenericResource(res, patchData, restorePatch)
+		generic := newGenericResource(res, patchData, restorePatch, resourceGenerations)
 
 		var err error
 		generic.data, err = generic.getListByNamespace(ctx, namespace, patchData.Target)
@@ -243,6 +251,18 @@ func (g managedResources) Sleep(ctx context.Context) error {
 				"resourceName", resource.GetName(),
 				"resourceKind", resource.GetKind(),
 			)
+			currentResource := &unstructured.Unstructured{}
+			currentResource.SetGroupVersionKind(resource.GroupVersionKind())
+			currentResource.SetName(resource.GetName())
+			currentResource.SetNamespace(resource.GetNamespace())
+			if err := resourceWrapper.Client.Get(ctx, client.ObjectKeyFromObject(currentResource), currentResource); err != nil {
+				g.logger.Error(err, "failed to re-read resource after sleep patch",
+					"resourceName", resource.GetName(),
+					"resourceKind", resource.GetKind(),
+				)
+			} else {
+				resourceWrapper.sleptGenerations[resource.GetName()] = currentResource.GetGeneration()
+			}
 			resourceWrapper.isCacheInvalid = true
 		}
 	}
@@ -355,97 +375,20 @@ func (g managedResources) WakeUp(ctx context.Context) error {
 
 			rawPatch, ok := resourceWrapper.restorePatches[resource.GetName()]
 			if !ok {
-				// EXTENSIÓN: Si no hay restore patch pero hay un patch definido, aplicar el patch directamente
-				// Esto permite que SleepInfos de wake con patches funcionen sin necesidad de restore patches
-				// (útil para recursos gestionados por operadores que se crean/eliminan dinámicamente)
-				// IMPORTANTE: El operador restaurará las réplicas automáticamente basándose en el spec original del recurso
-				if resourceWrapper.patchData.Patch != "" {
-					g.logger.Info("no restore patch found, applying patch directly for wake",
-						"resourceName", resource.GetName(),
-						"resourceKind", resource.GetKind(),
-						"patch", resourceWrapper.patchData.Patch,
-					)
-
-					modified, err := patcherFn.Exec(current)
-					if err != nil {
-						// EXTENSIÓN: Manejar casos donde el patch falla por operación incorrecta
-						// - Si falla con "add" (anotación ya existe), intentar con "replace"
-						// - Si falla con "replace" (anotación no existe), intentar con "add"
-						patchStr := resourceWrapper.patchData.Patch
-						if strings.Contains(patchStr, "annotations") {
-							var fallbackPatcher *patcher.Patcher
-							var fallbackErr error
-
-							if strings.Contains(patchStr, "op: add") {
-								// Intentar con replace si add falla
-								patchStrReplace := strings.Replace(patchStr, "op: add", "op: replace", 1)
-								fallbackPatcher, fallbackErr = patcher.New([]byte(patchStrReplace))
-								if fallbackErr == nil {
-									modified, err = fallbackPatcher.Exec(current)
-									if err == nil {
-										g.logger.V(8).Info("patch add failed, successfully used replace instead",
-											"resourceName", resource.GetName(),
-											"resourceKind", resource.GetKind(),
-										)
-									}
-								}
-							} else if strings.Contains(patchStr, "op: replace") {
-								// Intentar con add si replace falla (anotación no existe)
-								patchStrAdd := strings.Replace(patchStr, "op: replace", "op: add", 1)
-								fallbackPatcher, fallbackErr = patcher.New([]byte(patchStrAdd))
-								if fallbackErr == nil {
-									modified, err = fallbackPatcher.Exec(current)
-									if err == nil {
-										g.logger.V(8).Info("patch replace failed, successfully used add instead",
-											"resourceName", resource.GetName(),
-											"resourceKind", resource.GetKind(),
-										)
-									}
-								}
-							}
-						}
-
-						if err != nil {
-							g.logger.Error(err, "fails to apply patch (tried original and fallback)",
-								"resourceName", resource.GetName(),
-								"resourceKind", resource.GetKind(),
-								"patch", resourceWrapper.patchData.Patch,
-							)
-							continue
-						}
-					}
-
-					res := &unstructured.Unstructured{}
-					if err := json.Unmarshal(modified, &res.Object); err != nil {
-						g.logger.Error(err, "failed to unmarshal modified resource for wake, skipping",
-							"resourceName", resource.GetName(),
-							"resourceKind", resource.GetKind(),
-						)
-						// Continue with next resource instead of stopping entire operation
-						continue
-					}
-
-					if err := resourceWrapper.SSAPatch(ctx, res); err != nil {
-						// CRITICAL: If SSAPatch fails, log error but continue with other resources
-						g.logger.Error(err, "failed to apply SSAPatch for wake, continuing with other resources",
-							"resourceName", resource.GetName(),
-							"resourceKind", resource.GetKind(),
-						)
-						// Continue with next resource instead of stopping entire operation
-						continue
-					}
-					g.logger.Info("patch applied successfully for wake (operator will restore replicas from spec)",
-						"resourceName", resource.GetName(),
-						"resourceKind", resource.GetKind(),
-					)
-					resourceWrapper.isCacheInvalid = true
-					continue
-				}
-
-				// Si no hay restore patch y no hay patch, omitir (comportamiento original para Deployments/StatefulSets)
+				// No restore patch means we don't have a previous state to restore safely.
+				// Applying the sleep patch on wake could keep workloads suspended.
 				g.logger.Info("no restore patch found for resource, skipped",
 					"resourceName", resource.GetName(),
 					"resourceKind", resource.GetKind(),
+				)
+				continue
+			}
+			if expectedGeneration, ok := resourceWrapper.sleptGenerations[resource.GetName()]; ok && expectedGeneration > 0 && resource.GetGeneration() != expectedGeneration {
+				g.logger.Info("resource modified after sleep and before wake up, skip wake up",
+					"resourceName", resource.GetName(),
+					"resourceKind", resource.GetKind(),
+					"expectedGeneration", expectedGeneration,
+					"currentGeneration", resource.GetGeneration(),
 				)
 				continue
 			}
@@ -525,6 +468,22 @@ func (g managedResources) GetOriginalInfoToSave() ([]byte, error) {
 	return json.Marshal(dataToSave)
 }
 
+func (g managedResources) GetSleepGenerationsToSave() ([]byte, error) {
+	if len(g.resMapping) == 0 {
+		return nil, nil
+	}
+
+	dataToSave := map[string]SleptResourceGenerations{}
+	for key, res := range g.resMapping {
+		if len(res.sleptGenerations) == 0 {
+			continue
+		}
+		dataToSave[key.String()] = res.sleptGenerations
+	}
+
+	return json.Marshal(dataToSave)
+}
+
 func GetOriginalInfoToRestore(data []byte) (map[string]RestorePatches, error) {
 	if data == nil {
 		return nil, nil
@@ -536,4 +495,17 @@ func GetOriginalInfoToRestore(data []byte) (map[string]RestorePatches, error) {
 	}
 
 	return resourcePatches, nil
+}
+
+func GetSleepGenerationsToRestore(data []byte) (map[string]SleptResourceGenerations, error) {
+	if data == nil {
+		return nil, nil
+	}
+
+	resourceGenerations := map[string]SleptResourceGenerations{}
+	if err := json.Unmarshal(data, &resourceGenerations); err != nil {
+		return nil, err
+	}
+
+	return resourceGenerations, nil
 }

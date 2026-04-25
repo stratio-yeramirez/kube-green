@@ -7,6 +7,7 @@ package sleepinfo
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	kubegreenv1alpha1 "github.com/kube-green/kube-green/api/v1alpha1"
@@ -19,9 +20,11 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 )
 
@@ -29,10 +32,16 @@ const (
 	lastScheduleKey               = "scheduled-at"
 	lastOperationKey              = "operation-type"
 	originalJSONPatchDataKey      = "original-resource-info"
+	sleptGenerationsDataKey       = "sleep-resource-generations"
 	replicasBeforeSleepAnnotation = "sleepinfo.kube-green.com/replicas-before-sleep"
 
 	sleepOperation  = "SLEEP"
 	wakeUpOperation = "WAKE_UP"
+
+	manualActionAnnotation   = "kube-green.stratio.com/manual-action"
+	manualActionTimeAnnotion = "kube-green.stratio.com/manual-at"
+
+	manualActionTTL = 5 * time.Minute
 )
 
 // SleepInfoReconciler reconciles a SleepInfo object
@@ -104,15 +113,51 @@ func (r *SleepInfoReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 	now := r.Now()
 
+	manualAction := ""
+	manualActionAt := ""
+	manualActionValid := false
+	manualActionShouldClear := false
+	if sleepInfo.Annotations != nil {
+		manualAction = strings.ToLower(strings.TrimSpace(sleepInfo.Annotations[manualActionAnnotation]))
+		manualActionAt = strings.TrimSpace(sleepInfo.Annotations[manualActionTimeAnnotion])
+	}
+
 	isToExecute, nextSchedule, requeueAfter, err := r.getNextSchedule(log, sleepInfoData, now)
 	if err != nil {
 		log.Error(err, "unable to update deployment with 0 replicas")
 		return ctrl.Result{}, err
 	}
+
+	if manualAction == "sleep" || manualAction == "wake" {
+		manualActionValid = true
+		if manualActionAt != "" {
+			parsedAt, err := time.Parse(time.RFC3339, manualActionAt)
+			if err != nil {
+				log.Info("manual action timestamp invalid, ignoring manual action", "manualAt", manualActionAt, "sleepinfo", sleepInfo.Name)
+				manualActionValid = false
+				manualActionShouldClear = true
+			} else if now.Sub(parsedAt) > manualActionTTL {
+				log.Info("manual action expired, ignoring manual action", "manualAt", manualActionAt, "sleepinfo", sleepInfo.Name)
+				manualActionValid = false
+				manualActionShouldClear = true
+			}
+		}
+	}
+
+	if manualActionValid {
+		if manualAction == "sleep" {
+			sleepInfoData.CurrentOperationType = sleepOperation
+		} else {
+			sleepInfoData.CurrentOperationType = wakeUpOperation
+		}
+		isToExecute = true
+		log.Info("manual action requested", "action", manualAction, "sleepinfo", sleepInfo.Name)
+	}
 	scheduleLog := log.WithValues("now", r.Now(), "next run", nextSchedule, "requeue", requeueAfter)
 
 	if !isToExecute {
 		scheduleLog.Info("skip execution")
+		r.reconcilePairedStatus(ctx, log, sleepInfo, req.Namespace)
 		return ctrl.Result{
 			RequeueAfter: requeueAfter,
 		}, nil
@@ -121,21 +166,62 @@ func (r *SleepInfoReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	// EXTENSIÓN: Si es operación WAKE_UP, buscar restore patches de SleepInfos relacionados
 	restorePatches := sleepInfoData.OriginalGenericResourceInfo
+	sleptGenerations := sleepInfoData.SleptResourceGenerations
 	if sleepInfoData.IsWakeUpOperation() {
-		relatedPatches, err := getRelatedRestorePatches(ctx, r.Client, log, sleepInfo, req.Namespace)
+		relatedPatches, relatedGenerations, err := getRelatedRestorePatches(ctx, r.Client, log, sleepInfo, req.Namespace)
 		if err != nil {
 			log.Error(err, "failed to get related restore patches, using current ones")
-		} else if relatedPatches != nil && len(relatedPatches) > 0 {
+		} else if (relatedPatches != nil && len(relatedPatches) > 0) || (relatedGenerations != nil && len(relatedGenerations) > 0) {
 			// Combinar restore patches: primero los relacionados, luego los del actual (el actual tiene prioridad)
-			log.Info("usando restore patches de SleepInfo relacionado", "count", len(relatedPatches))
+			log.Info(
+				"usando restore patches de SleepInfo relacionado",
+				"patchCount", len(relatedPatches),
+				"generationCount", len(relatedGenerations),
+			)
 			if restorePatches == nil {
 				restorePatches = make(map[string]jsonpatch.RestorePatches)
+			}
+			if sleptGenerations == nil {
+				sleptGenerations = make(map[string]jsonpatch.SleptResourceGenerations)
 			}
 			for key, patches := range relatedPatches {
 				if _, exists := restorePatches[key]; !exists {
 					restorePatches[key] = patches
 				}
 			}
+			for key, generations := range relatedGenerations {
+				if _, exists := sleptGenerations[key]; !exists {
+					sleptGenerations[key] = generations
+				}
+			}
+		}
+	}
+	if sleepInfoData.IsWakeUpOperation() && (len(restorePatches) == 0 || len(sleptGenerations) == 0) {
+		backupPatches, backupGenerations, err := r.getEmergencyRestorePatches(ctx, sleepInfo, req.Namespace)
+		if err != nil {
+			log.Error(err, "failed to get emergency restore patches")
+		} else if (backupPatches != nil && len(backupPatches) > 0) || (backupGenerations != nil && len(backupGenerations) > 0) {
+			if restorePatches == nil {
+				restorePatches = make(map[string]jsonpatch.RestorePatches)
+			}
+			if sleptGenerations == nil {
+				sleptGenerations = make(map[string]jsonpatch.SleptResourceGenerations)
+			}
+			for key, patches := range backupPatches {
+				if _, exists := restorePatches[key]; !exists {
+					restorePatches[key] = patches
+				}
+			}
+			for key, generations := range backupGenerations {
+				if _, exists := sleptGenerations[key]; !exists {
+					sleptGenerations[key] = generations
+				}
+			}
+			log.Info(
+				"using emergency restore data",
+				"patchCount", len(backupPatches),
+				"generationCount", len(backupGenerations),
+			)
 		}
 	}
 
@@ -183,17 +269,18 @@ func (r *SleepInfoReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		SleepInfo:        sleepInfoWithPatches,
 		Log:              log,
 		FieldManagerName: r.ManagerName,
-	}, req.Namespace, restorePatches)
+	}, req.Namespace, restorePatches, sleptGenerations)
 	if err != nil {
 		log.Error(err, "fails to get resources")
 		return ctrl.Result{}, err
 	}
 
-	if err := r.handleSleepInfoStatus(ctx, now, sleepInfo, sleepInfoData.CurrentOperationType, resources); err != nil {
+	if err := r.handleSleepInfoStatus(ctx, now, sleepInfo, sleepInfoData.CurrentOperationType); err != nil {
 		log.Error(err, "unable to update sleepInfo status")
 		return ctrl.Result{}, err
 	}
 	log.V(8).Info("update status info")
+	r.syncPairedSleepInfoStatus(ctx, log, sleepInfo, sleepInfoData.CurrentOperationType, req.Namespace, now)
 
 	logSecret := log.WithValues("secret", secretName)
 	if !resources.HasResource() {
@@ -249,6 +336,12 @@ func (r *SleepInfoReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		}, nil
 	}
 
+	if manualActionValid || manualActionShouldClear {
+		if err := r.clearManualAction(ctx, sleepInfo); err != nil {
+			log.Error(err, "failed to clear manual action annotation")
+		}
+	}
+
 	return ctrl.Result{
 		RequeueAfter: requeueAfter,
 	}, nil
@@ -260,7 +353,43 @@ func (r *SleepInfoReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		r.Clock = realClock{}
 	}
 
-	pred := predicate.GenerationChangedPredicate{}
+	pred := predicate.Funcs{
+		CreateFunc: func(event.CreateEvent) bool {
+			return true
+		},
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			if e.ObjectOld == nil || e.ObjectNew == nil {
+				return false
+			}
+			if e.ObjectOld.GetGeneration() != e.ObjectNew.GetGeneration() {
+				return true
+			}
+			oldAnn := e.ObjectOld.GetAnnotations()
+			newAnn := e.ObjectNew.GetAnnotations()
+			oldAction := ""
+			newAction := ""
+			if oldAnn != nil {
+				oldAction = strings.ToLower(strings.TrimSpace(oldAnn[manualActionAnnotation]))
+			}
+			if newAnn != nil {
+				newAction = strings.ToLower(strings.TrimSpace(newAnn[manualActionAnnotation]))
+			}
+			if newAction != oldAction && (newAction == "sleep" || newAction == "wake") {
+				return true
+			}
+			if newAction != "" && oldAnn != nil && newAnn != nil &&
+				newAnn[manualActionTimeAnnotion] != oldAnn[manualActionTimeAnnotion] {
+				return true
+			}
+			return false
+		},
+		DeleteFunc: func(event.DeleteEvent) bool {
+			return false
+		},
+		GenericFunc: func(event.GenericEvent) bool {
+			return false
+		},
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&kubegreenv1alpha1.SleepInfo{}).
 		Named("kubegreen-sleepinfo").
@@ -269,6 +398,25 @@ func (r *SleepInfoReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		}).
 		WithEventFilter(pred).
 		Complete(r)
+}
+
+func (r *SleepInfoReconciler) clearManualAction(ctx context.Context, sleepInfo *kubegreenv1alpha1.SleepInfo) error {
+	key := client.ObjectKeyFromObject(sleepInfo)
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		latest := &kubegreenv1alpha1.SleepInfo{}
+		if err := r.Get(ctx, key, latest); err != nil {
+			return err
+		}
+		if latest.Annotations == nil {
+			return nil
+		}
+		if _, exists := latest.Annotations[manualActionAnnotation]; !exists {
+			return nil
+		}
+		delete(latest.Annotations, manualActionAnnotation)
+		delete(latest.Annotations, manualActionTimeAnnotion)
+		return r.Update(ctx, latest)
+	})
 }
 
 func (r *SleepInfoReconciler) getSleepInfo(ctx context.Context, req ctrl.Request) (*kubegreenv1alpha1.SleepInfo, error) {
@@ -295,13 +443,134 @@ func (r SleepInfoReconciler) handleSleepInfoStatus(
 	now time.Time,
 	currentSleepInfo *kubegreenv1alpha1.SleepInfo,
 	currentOperationType string,
-	resources resource.Resource,
 ) error {
 	sleepInfo := currentSleepInfo.DeepCopy()
 	sleepInfo.Status.LastScheduleTime = metav1.NewTime(now)
 	sleepInfo.Status.OperationType = currentOperationType
-	if !resources.HasResource() {
-		sleepInfo.Status.OperationType = ""
-	}
 	return r.Status().Update(ctx, sleepInfo)
+}
+
+// reconcilePairedStatus compares lastScheduleTime between the current SleepInfo and its pair.
+// Only the resource with the more recent operation propagates its status to the other,
+// preventing the two resources from fighting each other.
+func (r SleepInfoReconciler) reconcilePairedStatus(
+	ctx context.Context,
+	log logr.Logger,
+	currentSleepInfo *kubegreenv1alpha1.SleepInfo,
+	namespace string,
+) {
+	annotations := currentSleepInfo.GetAnnotations()
+	pairID := ""
+	if annotations != nil {
+		pairID = annotations[pairIDAnnotation]
+	}
+	currentOp := currentSleepInfo.Status.OperationType
+	log.Info("reconcilePairedStatus: entry", "name", currentSleepInfo.Name, "pairID", pairID, "op", currentOp, "hasAnnotations", annotations != nil)
+	if pairID == "" {
+		return
+	}
+	log.Info("reconcilePairedStatus: checking pair", "name", currentSleepInfo.Name, "pairID", pairID, "op", currentOp, "time", currentSleepInfo.Status.LastScheduleTime)
+	if currentOp == "" {
+		log.Info("reconcilePairedStatus: no operation in status, skipping")
+		return
+	}
+
+	currentRole := annotations[pairRoleAnnotation]
+	sleepInfoList := &kubegreenv1alpha1.SleepInfoList{}
+	if err := r.List(ctx, sleepInfoList, client.InNamespace(namespace)); err != nil {
+		log.Error(err, "reconcilePairedStatus: failed to list SleepInfos")
+		return
+	}
+	log.Info("reconcilePairedStatus: listed SleepInfos", "count", len(sleepInfoList.Items))
+
+	for i := range sleepInfoList.Items {
+		si := &sleepInfoList.Items[i]
+		if si.Name == currentSleepInfo.Name {
+			continue
+		}
+		siAnnotations := si.GetAnnotations()
+		if siAnnotations == nil {
+			continue
+		}
+		if siAnnotations[pairIDAnnotation] != pairID || siAnnotations[pairRoleAnnotation] == currentRole {
+			continue
+		}
+		log.Info("reconcilePairedStatus: found pair", "pair", si.Name, "pairOp", si.Status.OperationType, "pairTime", si.Status.LastScheduleTime)
+		if si.Status.OperationType == currentOp {
+			log.Info("reconcilePairedStatus: already consistent", "pair", si.Name)
+			continue
+		}
+		pairedTime := si.Status.LastScheduleTime.Time
+		currentTime := currentSleepInfo.Status.LastScheduleTime.Time
+		if !currentTime.After(pairedTime) {
+			log.Info("reconcilePairedStatus: pair is more recent, skipping", "pair", si.Name, "currentTime", currentTime, "pairedTime", pairedTime)
+			continue
+		}
+		fresh := &kubegreenv1alpha1.SleepInfo{}
+		if err := r.Get(ctx, client.ObjectKeyFromObject(si), fresh); err != nil {
+			log.Error(err, "reconcilePairedStatus: failed to get paired SleepInfo", "paired", si.Name)
+			continue
+		}
+		fresh.Status.OperationType = currentOp
+		fresh.Status.LastScheduleTime = currentSleepInfo.Status.LastScheduleTime
+		if err := r.Status().Update(ctx, fresh); err != nil {
+			log.Error(err, "reconcilePairedStatus: failed to update paired SleepInfo status", "paired", si.Name)
+		} else {
+			log.Info("reconcilePairedStatus: synced paired SleepInfo status", "paired", si.Name, "operation", fresh.Status.OperationType)
+		}
+	}
+}
+
+// syncPairedSleepInfoStatus updates the status of the paired SleepInfo (same pair-id, opposite role)
+// so both resources always reflect the current state of services.
+func (r SleepInfoReconciler) syncPairedSleepInfoStatus(
+	ctx context.Context,
+	log logr.Logger,
+	currentSleepInfo *kubegreenv1alpha1.SleepInfo,
+	operationType string,
+	namespace string,
+	now time.Time,
+) {
+	annotations := currentSleepInfo.GetAnnotations()
+	if annotations == nil {
+		return
+	}
+	pairID := annotations[pairIDAnnotation]
+	if pairID == "" {
+		return
+	}
+	currentRole := annotations[pairRoleAnnotation]
+
+	sleepInfoList := &kubegreenv1alpha1.SleepInfoList{}
+	if err := r.List(ctx, sleepInfoList, client.InNamespace(namespace)); err != nil {
+		log.Error(err, "syncPairedStatus: failed to list SleepInfos")
+		return
+	}
+
+	for i := range sleepInfoList.Items {
+		si := &sleepInfoList.Items[i]
+		if si.Name == currentSleepInfo.Name {
+			continue
+		}
+		siAnnotations := si.GetAnnotations()
+		if siAnnotations == nil {
+			continue
+		}
+		if siAnnotations[pairIDAnnotation] == pairID && siAnnotations[pairRoleAnnotation] != currentRole {
+			// Fetch fresh to avoid 409 Conflict from stale resourceVersion in cache
+			fresh := &kubegreenv1alpha1.SleepInfo{}
+			if err := r.Get(ctx, client.ObjectKeyFromObject(si), fresh); err != nil {
+				log.Error(err, "syncPairedStatus: failed to get paired SleepInfo", "paired", si.Name)
+				return
+			}
+			fresh.Status.OperationType = operationType
+			fresh.Status.LastScheduleTime = metav1.NewTime(now)
+			if err := r.Status().Update(ctx, fresh); err != nil {
+				log.Error(err, "syncPairedStatus: failed to update paired SleepInfo status", "paired", si.Name)
+			} else {
+				log.Info("syncPairedStatus: updated paired SleepInfo status", "paired", si.Name, "operation", operationType)
+			}
+			return
+		}
+	}
 }

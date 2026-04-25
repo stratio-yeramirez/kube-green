@@ -115,6 +115,82 @@ func (s *Server) handleListTenants(c *gin.Context) {
 	})
 }
 
+// handleGetNamespaceServices lists services in a tenant namespace
+// @Summary Get services for a namespace
+// @Description Lists deployments, statefulsets and cronjobs for a tenant namespace
+// @Tags Namespaces
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param tenant path string true "Tenant name" example:"bdaqa"
+// @Param namespace query string true "Namespace suffix" example:"apps"
+// @Success 200 {object} APIResponse{data=NamespaceServicesResponse}
+// @Failure 400 {object} ErrorResponse "Invalid request parameters"
+// @Failure 500 {object} ErrorResponse "Internal server error"
+// @Router /api/v1/namespaces/{tenant}/services [get]
+func (s *Server) handleGetNamespaceServices(c *gin.Context) {
+	tenant := c.Param("tenant")
+	namespace := c.Query("namespace")
+	if tenant == "" || namespace == "" {
+		c.JSON(http.StatusBadRequest, ErrorResponse{
+			Success: false,
+			Error:   "tenant and namespace parameters are required",
+			Code:    http.StatusBadRequest,
+		})
+		return
+	}
+
+	services, err := s.scheduleService.GetNamespaceServices(c.Request.Context(), tenant, namespace)
+	if err != nil {
+		s.logger.Error(err, "failed to get namespace services", "tenant", tenant, "namespace", namespace)
+		handleKubernetesError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, APIResponse{
+		Success: true,
+		Data:    services,
+	})
+}
+
+// handleGetNamespaceResources detects resources in a tenant namespace
+// @Summary Get resources for a namespace
+// @Description Detects CRDs and resource counts for a tenant namespace
+// @Tags Namespaces
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param tenant path string true "Tenant name" example:"bdaqa"
+// @Param namespace query string true "Namespace suffix" example:"apps"
+// @Success 200 {object} APIResponse{data=NamespaceResourceInfo}
+// @Failure 400 {object} ErrorResponse "Invalid request parameters"
+// @Failure 500 {object} ErrorResponse "Internal server error"
+// @Router /api/v1/namespaces/{tenant}/resources [get]
+func (s *Server) handleGetNamespaceResources(c *gin.Context) {
+	tenant := c.Param("tenant")
+	namespace := c.Query("namespace")
+	if tenant == "" || namespace == "" {
+		c.JSON(http.StatusBadRequest, ErrorResponse{
+			Success: false,
+			Error:   "tenant and namespace parameters are required",
+			Code:    http.StatusBadRequest,
+		})
+		return
+	}
+
+	resources, err := s.scheduleService.GetNamespaceResources(c.Request.Context(), tenant, namespace)
+	if err != nil {
+		s.logger.Error(err, "failed to get namespace resources", "tenant", tenant, "namespace", namespace)
+		handleKubernetesError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, APIResponse{
+		Success: true,
+		Data:    resources,
+	})
+}
+
 // handleListSchedules lists all schedules
 // @Summary List all schedules
 // @Description Lists all SleepInfo schedules across all namespaces
@@ -315,13 +391,22 @@ func (s *Server) handleCreateSchedule(c *gin.Context) {
 // UpdateScheduleRequest represents a request to update a schedule
 // @Description Request to update an existing sleep/wake schedule for a tenant (all fields optional)
 type UpdateScheduleRequest struct {
-	Off        string   `json:"off,omitempty" example:"23:00"`         // Sleep time in local timezone (HH:MM format, 24-hour)
-	On         string   `json:"on,omitempty" example:"07:00"`          // Wake time in local timezone (HH:MM format, 24-hour)
-	Weekdays   string   `json:"weekdays,omitempty" example:"1-5"`      // Days of week (human format: "lunes-viernes", or numeric: "1-5")
-	SleepDays  string   `json:"sleepDays,omitempty" example:"viernes"` // Optional: specific days for sleep (overrides weekdays)
-	WakeDays   string   `json:"wakeDays,omitempty" example:"lunes"`    // Optional: specific days for wake (overrides weekdays)
-	Namespaces []string `json:"namespaces,omitempty" example:"apps"`   // Optional: limit to specific namespaces
-	Apply      bool     `json:"apply,omitempty"`                       // Always applies to cluster (field is ignored)
+	Off           string   `json:"off,omitempty" example:"23:00"`             // Sleep time in local timezone (HH:MM format, 24-hour)
+	On            string   `json:"on,omitempty" example:"07:00"`              // Wake time in local timezone (HH:MM format, 24-hour)
+	Weekdays      string   `json:"weekdays,omitempty" example:"1-5"`          // Days of week (human format: "lunes-viernes", or numeric: "1-5")
+	SleepDays     string   `json:"sleepDays,omitempty" example:"viernes"`     // Optional: specific days for sleep (overrides weekdays)
+	WakeDays      string   `json:"wakeDays,omitempty" example:"lunes"`        // Optional: specific days for wake (overrides weekdays)
+	WeekdaysSleep string   `json:"weekdaysSleep,omitempty" example:"viernes"` // Frontend format: specific days for sleep (mapped to sleepDays)
+	WeekdaysWake  string   `json:"weekdaysWake,omitempty" example:"lunes"`    // Frontend format: specific days for wake (mapped to wakeDays)
+	Namespaces    []string `json:"namespaces,omitempty" example:"apps"`       // Optional: limit to specific namespaces
+	Apply         bool     `json:"apply,omitempty"`                           // Always applies to cluster (field is ignored)
+}
+
+// ManualScheduleRequest represents a manual sleep/wake action for a schedule
+type ManualScheduleRequest struct {
+	Action       string `json:"action" binding:"required"` // "sleep" or "wake"
+	ScheduleName string `json:"scheduleName,omitempty"`    // Optional: target specific schedule name
+	Namespace    string `json:"namespace,omitempty"`       // Optional: target namespace suffix
 }
 
 // handleUpdateSchedule updates an existing schedule
@@ -380,14 +465,27 @@ func (s *Server) handleUpdateSchedule(c *gin.Context) {
 		return
 	}
 
+	// Map frontend format (weekdaysSleep/weekdaysWake) to backend format (sleepDays/wakeDays)
+	sleepDays := req.SleepDays
+	if sleepDays == "" && req.WeekdaysSleep != "" {
+		sleepDays = req.WeekdaysSleep
+		s.logger.Info("Mapped weekdaysSleep to sleepDays (update)", "weekdaysSleep", req.WeekdaysSleep, "sleepDays", sleepDays)
+	}
+
+	wakeDays := req.WakeDays
+	if wakeDays == "" && req.WeekdaysWake != "" {
+		wakeDays = req.WeekdaysWake
+		s.logger.Info("Mapped weekdaysWake to wakeDays (update)", "weekdaysWake", req.WeekdaysWake, "wakeDays", wakeDays)
+	}
+
 	// Convert UpdateScheduleRequest to CreateScheduleRequest
 	createReq := CreateScheduleRequest{
 		Tenant:     tenant,
 		Off:        req.Off,
 		On:         req.On,
 		Weekdays:   req.Weekdays,
-		SleepDays:  req.SleepDays,
-		WakeDays:   req.WakeDays,
+		SleepDays:  sleepDays,
+		WakeDays:   wakeDays,
 		Namespaces: req.Namespaces,
 	}
 
@@ -435,6 +533,85 @@ func (s *Server) handleUpdateSchedule(c *gin.Context) {
 	c.JSON(http.StatusOK, APIResponse{
 		Success: true,
 		Message: fmt.Sprintf("Schedule updated successfully for tenant %s", tenant),
+	})
+}
+
+// handleManualScheduleAction triggers a manual sleep/wake for a schedule
+// @Summary Manual sleep/wake action
+// @Description Triggers a manual sleep or wake operation without changing the schedule
+// @Tags Schedules
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param tenant path string true "Tenant name" example:"bdadevdat"
+// @Param request body ManualScheduleRequest true "Manual action payload"
+// @Success 200 {object} APIResponse "Manual action triggered successfully"
+// @Failure 400 {object} ErrorResponse "Invalid request parameters"
+// @Failure 404 {object} ErrorResponse "Schedule not found"
+// @Failure 500 {object} ErrorResponse "Internal server error"
+// @Router /api/v1/schedules/{tenant}/manual [post]
+func (s *Server) handleManualScheduleAction(c *gin.Context) {
+	// Check permissions
+	role, exists := c.Get("role")
+	if !exists || !auth.CanCreateSchedule(role.(string)) {
+		c.JSON(http.StatusForbidden, ErrorResponse{
+			Success: false,
+			Error:   "Insufficient permissions. Only admin and operacion roles can trigger manual actions",
+			Code:    http.StatusForbidden,
+		})
+		return
+	}
+
+	tenant := c.Param("tenant")
+	if tenant == "" {
+		c.JSON(http.StatusBadRequest, ErrorResponse{
+			Success: false,
+			Error:   "tenant parameter is required",
+			Code:    http.StatusBadRequest,
+		})
+		return
+	}
+
+	var req ManualScheduleRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{
+			Success: false,
+			Error:   err.Error(),
+			Code:    http.StatusBadRequest,
+		})
+		return
+	}
+
+	if req.Action == "" {
+		c.JSON(http.StatusBadRequest, ErrorResponse{
+			Success: false,
+			Error:   "action is required (sleep|wake)",
+			Code:    http.StatusBadRequest,
+		})
+		return
+	}
+
+	if err := s.scheduleService.TriggerManualAction(c.Request.Context(), tenant, req.Action, req.ScheduleName, req.Namespace); err != nil {
+		s.logger.Error(err, "failed to trigger manual action", "tenant", tenant, "action", req.Action)
+		if strings.Contains(err.Error(), "no schedules found") {
+			c.JSON(http.StatusNotFound, ErrorResponse{
+				Success: false,
+				Error:   err.Error(),
+				Code:    http.StatusNotFound,
+			})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, ErrorResponse{
+			Success: false,
+			Error:   fmt.Sprintf("Failed to trigger manual action: %v", err),
+			Code:    http.StatusInternalServerError,
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, APIResponse{
+		Success: true,
+		Message: fmt.Sprintf("Manual action '%s' triggered successfully for tenant %s", req.Action, tenant),
 	})
 }
 
