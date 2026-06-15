@@ -270,10 +270,12 @@ export default function ScheduleEditor() {
           const wakeTimeUTC = wakeInfo?.wakeUpAt || wakeInfo?.sleepAt || wakeInfo?.time || wakeInfo?.Time || null
           const timeZone = sleepInfo?.timeZone || wakeInfo?.timeZone || firstInfo?.timeZone || null
           const extractedUserTimezone =
+            sleepInfo?.userTimezone ||
+            wakeInfo?.userTimezone ||
             sleepInfo?.annotations?.['kube-green.stratio.com/user-timezone'] ||
             wakeInfo?.annotations?.['kube-green.stratio.com/user-timezone'] ||
             formData.userTimezone ||
-            'America/Bogota'
+            timeZone || 'UTC'
 
           const sleepWeekdaysStr = sleepInfo?.weekdays || sleepInfo?.Weekdays
           const wakeWeekdaysStr = wakeInfo?.weekdays || wakeInfo?.Weekdays
@@ -459,10 +461,12 @@ export default function ScheduleEditor() {
             let wakeWeekdaysStr = wakeSchedule.weekdays || wakeSchedule.Weekdays
             
             // IMPORTANTE: Extraer userTimezone ANTES de convertir weekdays
-            // Esto debe hacerse antes de las conversiones para usar la timezone correcta
-            const extractedUserTimezone = sleepSchedule.annotations?.['kube-green.stratio.com/user-timezone'] ||
+            // Prioridad: campo top-level del backend → annotation → valor del formulario → cluster TZ → UTC
+            const extractedUserTimezone = sleepSchedule.userTimezone ||
+                                         wakeSchedule.userTimezone ||
+                                         sleepSchedule.annotations?.['kube-green.stratio.com/user-timezone'] ||
                                          wakeSchedule.annotations?.['kube-green.stratio.com/user-timezone'] ||
-                                         formData.userTimezone || 'America/Bogota'
+                                         formData.userTimezone || timeZone || 'UTC'
             
             // Convertir weekdays de UTC de vuelta a la timezone del usuario
             // IMPORTANTE: Si sleepTimeUTC es null, intentar usar el tiempo del wake schedule como fallback
@@ -559,46 +563,59 @@ export default function ScheduleEditor() {
             let extractedDelays: any = undefined
             const datastoresNS = existingSchedule.namespaces?.['datastores']
             if (datastoresNS && namespaces.includes('datastores')) {
-              const datastoresSchedules = Array.isArray(datastoresNS) 
-                ? datastoresNS 
+              const datastoresSchedules = Array.isArray(datastoresNS)
+                ? datastoresNS
                 : (datastoresNS.schedule || [])
-              
-              // Buscar todos los schedules wake en datastores
-              const wakeSchedules = datastoresSchedules.filter((s: any) => 
-                s.role === 'wake' || 
+
+              // Caso A: weekdays DIFERENTES → SleepInfos separados con role="wake"
+              const wakeRoleSchedules = datastoresSchedules.filter((s: any) =>
+                s.role === 'wake' ||
                 s.annotations?.['kube-green.stratio.com/pair-role'] === 'wake' ||
                 s.name?.startsWith('wake')
               )
 
-              if (wakeSchedules.length >= 2) {
+              // Caso B: weekdays IGUALES → SleepInfos únicos con wakeTime embebido
+              // Los únicos tienen role="sleep" (por el prefijo "sleep-") pero incluyen wakeTime
+              const singleWithWake = datastoresSchedules.filter((s: any) =>
+                (s.wakeTime || s.WakeTime) && !wakeRoleSchedules.includes(s)
+              )
+
+              // Elegir fuente de tiempos: preferir wake-role (caso A), si no suficientes usar single+wakeTime (caso B)
+              let timeSourceSchedules: any[] = wakeRoleSchedules
+              let wakeTimeField = 'time' // campo que contiene la hora de encendido
+
+              if (wakeRoleSchedules.length < 2 && singleWithWake.length >= 2) {
+                // Normalizar los SleepInfos únicos para que 'time' apunte a wakeTime
+                timeSourceSchedules = singleWithWake.map((s: any) => ({
+                  ...s,
+                  time: s.wakeTime || s.WakeTime,
+                }))
+                wakeTimeField = 'wakeTime'
+              }
+
+              if (timeSourceSchedules.length >= 2) {
                 // Encontrar el tiempo base (el más temprano) - este es PgHDFS (t0)
-                const baseTime = wakeSchedules.reduce((earliest: string, sched: any) => {
-                  const time = sched.time || sched.Time || ''
-                  return (!earliest || time < earliest) ? time : earliest
+                const baseTime = timeSourceSchedules.reduce((earliest: string, sched: any) => {
+                  const t = sched.time || sched.Time || ''
+                  return (!earliest || t < earliest) ? t : earliest
                 }, '')
 
                 if (baseTime) {
                   extractedDelays = {}
-                  
-                  // Calcular delays basándose en los tiempos
-                  wakeSchedules.forEach((sched: any) => {
-                    const schedTime = sched.time || sched.Time || ''
-                    if (schedTime === baseTime) return // Skip el tiempo base
 
-                    // Calcular diferencia en minutos
+                  timeSourceSchedules.forEach((sched: any) => {
+                    const schedTime = sched.time || sched.Time || ''
+                    if (schedTime === baseTime) return // Skip tiempo base (PgHDFS = t0)
+
                     const delayMinutes = calculateTimeDifferenceMinutes(baseTime, schedTime)
-                    
-                    // Ajustar si el delay es negativo (cambio de día)
                     const adjustedDelayMinutes = delayMinutes < 0 ? delayMinutes + 24 * 60 : delayMinutes
-                    
-                    // Identificar el tipo de delay basándose en los recursos
+
                     const resources = (sched.resources || []).map((r: string) => r.toLowerCase())
                     const hasPostgres = resources.some((r: string) => r.includes('postgres'))
                     const hasHdfs = resources.some((r: string) => r.includes('hdfs'))
                     const hasPgbouncer = resources.some((r: string) => r.includes('pgbouncer'))
                     const hasDeployments = resources.some((r: string) => r.includes('deployment'))
 
-                    // Mapear a los campos de DelayConfig
                     if (hasPgbouncer && !hasDeployments && !extractedDelays.suspendDeploymentsPgbouncer) {
                       extractedDelays.suspendDeploymentsPgbouncer = formatMinutesToDelay(adjustedDelayMinutes)
                     } else if (hasDeployments && !hasPostgres && !hasHdfs && !extractedDelays.suspendDeployments) {
@@ -606,7 +623,6 @@ export default function ScheduleEditor() {
                     }
                   })
 
-                  // Solo usar si se encontraron delays
                   if (Object.keys(extractedDelays).length === 0) {
                     extractedDelays = undefined
                   }
@@ -1049,8 +1065,9 @@ export default function ScheduleEditor() {
         weekdaysSleep: weekdaysToString(selectedSleepWeekdays),
         weekdaysWake: weekdaysToString(selectedWakeWeekdays),
         exclusions: exclusionsFormatted.length > 0 ? exclusionsFormatted : undefined,
-        // Asegurar que userTimezone y clusterTimezone estén presentes
-        userTimezone: formData.userTimezone || 'America/Bogota',
+        // Asegurar que userTimezone y clusterTimezone estén presentes.
+        // Si el usuario no seleccionó zona horaria, usar la del cluster (ambos en UTC = sin conversión).
+        userTimezone: formData.userTimezone || formData.clusterTimezone || 'UTC',
         clusterTimezone: formData.clusterTimezone || 'UTC',
         // IMPORTANTE: Incluir scheduleName y description explícitamente para que no se pierdan al actualizar
         scheduleName: scheduleNameToSend,

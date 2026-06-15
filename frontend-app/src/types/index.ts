@@ -145,6 +145,7 @@ export interface ScheduleSummary {
   sleepTime?: string
   wakeTime?: string
   timeZone: string
+  userTimezone?: string // top-level from backend — authoritative, no annotation parsing needed
   role?: string
   operation?: string
   resources?: string[]

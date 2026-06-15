@@ -1257,19 +1257,21 @@ type FilterRef struct {
 
 // SleepInfoSummary represents a summary of a SleepInfo
 type SleepInfoSummary struct {
-	Name         string            `json:"name"`
-	Namespace    string            `json:"namespace"`
-	Role         string            `json:"role"`      // "sleep" or "wake"
-	Operation    string            `json:"operation"` // Human-readable description
-	Time         string            `json:"time"`      // Sleep or wake time
-	Weekdays     string            `json:"weekdays"`
-	TimeZone     string            `json:"timeZone"`
-	Resources    []string          `json:"resources"` // List of resources managed (Postgres, HDFS, PgBouncer, Deployments, etc.)
-	WakeTime     string            `json:"wakeTime,omitempty"`
-	ScheduleName string            `json:"scheduleName,omitempty"` // Schedule name if set
-	Description  string            `json:"description,omitempty"`  // Schedule description if set
-	Annotations  map[string]string `json:"annotations,omitempty"`
-	ExcludeRef   []FilterRef       `json:"excludeRef,omitempty"` // Exclusion filters
+	Name                 string            `json:"name"`
+	Namespace            string            `json:"namespace"`
+	Role                 string            `json:"role"`      // "sleep" or "wake"
+	Operation            string            `json:"operation"` // Human-readable description
+	Time                 string            `json:"time"`      // Sleep or wake time (UTC)
+	Weekdays             string            `json:"weekdays"`
+	TimeZone             string            `json:"timeZone"`     // Cluster timezone (always "UTC")
+	UserTimezone         string            `json:"userTimezone"` // User timezone (e.g. "America/Bogota") — authoritative source, no annotation parsing needed
+	Resources            []string          `json:"resources"` // List of resources managed (Postgres, HDFS, PgBouncer, Deployments, etc.)
+	WakeTime             string            `json:"wakeTime,omitempty"`
+	ScheduleName         string            `json:"scheduleName,omitempty"` // Schedule name if set
+	Description          string            `json:"description,omitempty"`  // Schedule description if set
+	Annotations          map[string]string `json:"annotations,omitempty"`
+	ExcludeRef           []FilterRef       `json:"excludeRef,omitempty"`           // Exclusion filters
+	SuspendScheduleUntil *time.Time        `json:"suspendScheduleUntil,omitempty"` // Non-nil when schedule is temporarily suspended
 }
 
 // ListSchedules lists all schedules grouped by tenant
@@ -1571,14 +1573,20 @@ func (s *ScheduleService) buildSleepInfoSummary(ctx context.Context, si kubegree
 		Role:         role,
 		Operation:    operation,
 		Time:         time,
-		Weekdays:     weekdaysUser, // Converted to user timezone
+		Weekdays:     weekdaysUser,
 		TimeZone:     si.Spec.TimeZone,
+		UserTimezone: userTimezone, // top-level, no annotation parsing needed by frontend
 		WakeTime:     si.Spec.WakeUpTime,
 		Resources:    resources,
 		ScheduleName: scheduleName,
 		Description:  description,
 		Annotations:  annotations,
 		ExcludeRef:   excludeRefs,
+	}
+
+	if si.Spec.SuspendScheduleUntil != nil {
+		t := si.Spec.SuspendScheduleUntil.Time
+		summary.SuspendScheduleUntil = &t
 	}
 
 	return summary
@@ -2176,8 +2184,95 @@ func (s *ScheduleService) TriggerManualAction(ctx context.Context, tenant, actio
 	return nil
 }
 
-func matchesScheduleName(si kubegreenv1alpha1.SleepInfo, scheduleName string) bool {
-	if scheduleName == "" {
+// SuspendSchedule sets spec.suspendScheduleUntil on all matching SleepInfos for the tenant.
+// While suspended the cron schedule is skipped; manual actions can still override it.
+func (s *ScheduleService) SuspendSchedule(ctx context.Context, tenant, scheduleName, namespaceSuffix string, until time.Time) error {
+	sleepInfoList := &kubegreenv1alpha1.SleepInfoList{}
+	if err := s.client.List(ctx, sleepInfoList); err != nil {
+		return fmt.Errorf("failed to list SleepInfos: %w", err)
+	}
+
+	updated := 0
+	for i := range sleepInfoList.Items {
+		si := &sleepInfoList.Items[i]
+		nsParts := strings.Split(si.Namespace, "-")
+		if len(nsParts) < 2 {
+			continue
+		}
+		tenantFromNS := strings.Join(nsParts[:len(nsParts)-1], "-")
+		if tenantFromNS != tenant {
+			continue
+		}
+
+		suffix := nsParts[len(nsParts)-1]
+		if namespaceSuffix != "" && suffix != namespaceSuffix {
+			continue
+		}
+
+		if scheduleName != "" && !matchesScheduleName(*si, scheduleName) {
+			continue
+		}
+
+		t := metav1.NewTime(until)
+		si.Spec.SuspendScheduleUntil = &t
+		if err := s.client.Update(ctx, si); err != nil {
+			return fmt.Errorf("failed to update SleepInfo %s: %w", si.Name, err)
+		}
+		updated++
+	}
+
+	if updated == 0 {
+		return fmt.Errorf("no schedules found for tenant: %s", tenant)
+	}
+	return nil
+}
+
+// UnsuspendSchedule removes spec.suspendScheduleUntil from all matching SleepInfos, resuming normal cron execution.
+func (s *ScheduleService) UnsuspendSchedule(ctx context.Context, tenant, scheduleName, namespaceSuffix string) error {
+	sleepInfoList := &kubegreenv1alpha1.SleepInfoList{}
+	if err := s.client.List(ctx, sleepInfoList); err != nil {
+		return fmt.Errorf("failed to list SleepInfos: %w", err)
+	}
+
+	updated := 0
+	for i := range sleepInfoList.Items {
+		si := &sleepInfoList.Items[i]
+		nsParts := strings.Split(si.Namespace, "-")
+		if len(nsParts) < 2 {
+			continue
+		}
+		tenantFromNS := strings.Join(nsParts[:len(nsParts)-1], "-")
+		if tenantFromNS != tenant {
+			continue
+		}
+
+		suffix := nsParts[len(nsParts)-1]
+		if namespaceSuffix != "" && suffix != namespaceSuffix {
+			continue
+		}
+
+		if scheduleName != "" && !matchesScheduleName(*si, scheduleName) {
+			continue
+		}
+
+		if si.Spec.SuspendScheduleUntil == nil {
+			updated++ // already unsuspended, count as success
+			continue
+		}
+		si.Spec.SuspendScheduleUntil = nil
+		if err := s.client.Update(ctx, si); err != nil {
+			return fmt.Errorf("failed to update SleepInfo %s: %w", si.Name, err)
+		}
+		updated++
+	}
+
+	if updated == 0 {
+		return fmt.Errorf("no schedules found for tenant: %s", tenant)
+	}
+	return nil
+}
+
+func matchesScheduleName(si kubegreenv1alpha1.SleepInfo, scheduleName string) bool {	if scheduleName == "" {
 		return true
 	}
 	if si.Annotations != nil {

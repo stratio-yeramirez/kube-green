@@ -159,8 +159,11 @@ export function useUpdateSchedule() {
       await queryClient.invalidateQueries({ queryKey: queryKeys.schedules(variables.tenant) })
       await queryClient.invalidateQueries({ queryKey: queryKeys.allSchedules })
       await queryClient.invalidateQueries({ queryKey: queryKeys.tenants })
-      
-      // Forzar refetch de todas las queries relacionadas
+
+      // Esperar a que el controller de Kubernetes aplique los cambios al CRD
+      // antes de hacer refetch, para evitar recibir datos obsoletos del API.
+      await new Promise((r) => setTimeout(r, 800))
+
       await queryClient.refetchQueries({ queryKey: queryKeys.schedules(variables.tenant) })
       await queryClient.refetchQueries({ queryKey: queryKeys.allSchedules })
     },

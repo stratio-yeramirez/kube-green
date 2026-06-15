@@ -341,11 +341,15 @@ export default function TenantDetail() {
                         const sleepTimeUTC = sleep?.time || sleep?.sleepTime || sleep?.Time || ''
                         const wakeTimeUTC = wake?.time || wake?.wakeTime || wake?.WakeTime || wake?.Time || ''
                         
-                        // Obtener timezone del usuario desde annotations o usar valor por defecto
-                        // El backend debería guardar esto en annotations, pero por ahora usamos un valor por defecto
-                        const userTimezone = sleep?.annotations?.['kube-green.stratio.com/user-timezone'] || 
-                                            wake?.annotations?.['kube-green.stratio.com/user-timezone'] || 
-                                            'America/Bogota' // Valor por defecto (timezone del usuario)
+                        // Obtener timezone del usuario: primero campo top-level del backend,
+                        // luego annotations, y como último recurso la timezone del cluster (UTC).
+                        // NO usar fallback hardcodeado como Colombia — si no hay anotación el schedule
+                        // fue creado sin timezone de usuario y los tiempos ya están en el cluster TZ.
+                        const userTimezone = sleep?.userTimezone ||
+                                            wake?.userTimezone ||
+                                            sleep?.annotations?.['kube-green.stratio.com/user-timezone'] ||
+                                            wake?.annotations?.['kube-green.stratio.com/user-timezone'] ||
+                                            timezone || 'UTC'
                         const clusterTimezone = timezone || 'UTC' // Timezone del cluster (siempre UTC)
                         
                         // Convertir weekdays de UTC a Colombia
