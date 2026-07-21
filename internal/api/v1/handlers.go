@@ -14,7 +14,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/kube-green/kube-green/internal/api/v1/auth"
+	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // APIResponse represents a standard API response
@@ -1470,13 +1473,20 @@ type NamespaceExclusion struct {
 	Filter    ExclusionFilter `json:"filter"`
 }
 
-// handleGetUIConfig returns UI configuration for the frontend (env name, color, etc.)
-// @Summary Get UI configuration
-// @Description Returns environment-specific UI configuration (colors, labels) read from env vars ENV_NAME, ENV_COLOR, ENV_LABEL
-// @Tags config
-// @Produce json
-// @Success 200 {object} map[string]string
-// @Router /ui-config [get]
+const uiConfigMapName = "kube-green-ui-config"
+
+func (s *Server) uiConfigNamespace() string {
+	if s.namespace != "" {
+		return s.namespace
+	}
+	if ns := os.Getenv("POD_NAMESPACE"); ns != "" {
+		return ns
+	}
+	return "keos-core"
+}
+
+// handleGetUIConfig returns UI configuration for the frontend.
+// Reads from ConfigMap kube-green-ui-config first; falls back to env vars.
 func (s *Server) handleGetUIConfig(c *gin.Context) {
 	envName := os.Getenv("ENV_NAME")
 	if envName == "" {
@@ -1492,10 +1502,100 @@ func (s *Server) handleGetUIConfig(c *gin.Context) {
 	}
 	clusterName := os.Getenv("CLUSTER_NAME")
 
+	cm := &corev1.ConfigMap{}
+	if err := s.reader.Get(c.Request.Context(), types.NamespacedName{Name: uiConfigMapName, Namespace: s.uiConfigNamespace()}, cm); err == nil && cm.Data != nil {
+		if v := cm.Data["envName"]; v != "" {
+			envName = v
+		}
+		if v := cm.Data["envColor"]; v != "" {
+			envColor = v
+		}
+		if v := cm.Data["envLabel"]; v != "" {
+			envLabel = v
+		}
+		if v, ok := cm.Data["clusterName"]; ok {
+			clusterName = v
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"envName":     envName,
 		"envColor":    envColor,
 		"envLabel":    envLabel,
 		"clusterName": clusterName,
 	})
+}
+
+// handleUpdateUIConfig persists UI configuration to ConfigMap kube-green-ui-config.
+// Requires admin role. The path is in publicPaths so JWT is validated manually here.
+func (s *Server) handleUpdateUIConfig(c *gin.Context) {
+	if len(s.jwtSecret) > 0 {
+		authHeader := c.GetHeader("Authorization")
+		if authHeader == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": "Authorization required"})
+			return
+		}
+		parts := strings.Split(authHeader, " ")
+		if len(parts) != 2 || parts[0] != "Bearer" {
+			c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": "Invalid authorization format"})
+			return
+		}
+		claims, err := auth.ValidateToken(parts[1], s.jwtSecret)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": "Invalid or expired token"})
+			return
+		}
+		if claims.Role != "admin" {
+			c.JSON(http.StatusForbidden, gin.H{"success": false, "error": "Admin role required"})
+			return
+		}
+	}
+
+	var req struct {
+		EnvName     string `json:"envName"`
+		EnvColor    string `json:"envColor"`
+		EnvLabel    string `json:"envLabel"`
+		ClusterName string `json:"clusterName"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	ctx := c.Request.Context()
+	ns := s.uiConfigNamespace()
+
+	existing := &corev1.ConfigMap{}
+	err := s.client.Get(ctx, types.NamespacedName{Name: uiConfigMapName, Namespace: ns}, existing)
+	if err != nil {
+		if !k8serrors.IsNotFound(err) {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "Failed to read config"})
+			return
+		}
+		cm := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: uiConfigMapName, Namespace: ns},
+			Data: map[string]string{
+				"envName": req.EnvName, "envColor": req.EnvColor,
+				"envLabel": req.EnvLabel, "clusterName": req.ClusterName,
+			},
+		}
+		if createErr := s.client.Create(ctx, cm); createErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "Failed to create config"})
+			return
+		}
+	} else {
+		if existing.Data == nil {
+			existing.Data = map[string]string{}
+		}
+		existing.Data["envName"] = req.EnvName
+		existing.Data["envColor"] = req.EnvColor
+		existing.Data["envLabel"] = req.EnvLabel
+		existing.Data["clusterName"] = req.ClusterName
+		if updateErr := s.client.Update(ctx, existing); updateErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "Failed to update config"})
+			return
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "UI config updated"})
 }

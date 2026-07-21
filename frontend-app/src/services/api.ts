@@ -243,6 +243,11 @@ class ApiClient {
     return response.json()
   }
 
+  // Update UI configuration — admin only, persists to ConfigMap
+  async updateUIConfig(config: { envName: string; envColor: string; envLabel: string; clusterName: string }): Promise<void> {
+    await this.client.put('/ui-config', config)
+  }
+
   // Convert timezone
   async convertTimezone(
     time: string,

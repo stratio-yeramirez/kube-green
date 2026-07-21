@@ -28,6 +28,7 @@ var apiDocumentationHTML string
 // Server represents the REST API server
 type Server struct {
 	client          client.Client
+	reader          client.Reader // direct API reader, bypasses informer cache
 	logger          logr.Logger
 	router          *gin.Engine
 	httpServer      *http.Server
@@ -35,6 +36,8 @@ type Server struct {
 	scheduleService *ScheduleService
 	authHandler     *auth.AuthHandler
 	userStore       *auth.UserStore
+	jwtSecret       []byte // stored for manual auth in public-path handlers
+	namespace       string // namespace where config secrets/configmaps live
 }
 
 // Config holds the configuration for the REST API server
@@ -63,11 +66,20 @@ func NewServer(config Config) *Server {
 		router.Use(corsMiddleware())
 	}
 
+	var rdr client.Reader
+	if config.APIReader != nil {
+		rdr = config.APIReader
+	} else {
+		rdr = config.Client
+	}
+
 	server := &Server{
 		client:          config.Client,
+		reader:          rdr,
 		logger:          config.Logger,
 		router:          router,
 		port:            config.Port,
+		namespace:       config.Namespace,
 		scheduleService: NewScheduleService(config.Client, config.Logger, config.APIReader),
 	}
 
@@ -90,6 +102,7 @@ func NewServer(config Config) *Server {
 			} else {
 				server.userStore = userStore
 				server.authHandler = auth.NewAuthHandler(userStore, jwtSecret)
+				server.jwtSecret = jwtSecret
 				config.Logger.Info("Authentication enabled", "namespace", config.Namespace)
 			}
 		}
@@ -124,6 +137,7 @@ func (s *Server) setupRoutes() {
 	s.router.GET("/ready", s.handleReady)
 	s.router.GET("/api/v1/info", s.handleInfo)
 	s.router.GET("/api/v1/ui-config", s.handleGetUIConfig)
+	s.router.PUT("/api/v1/ui-config", s.handleUpdateUIConfig)
 
 	// Authentication endpoints (public, no auth required)
 	// Always register routes, handler will initialize auth if needed
