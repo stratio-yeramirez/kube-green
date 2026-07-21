@@ -1566,7 +1566,7 @@ func (s *Server) handleUpdateUIConfig(c *gin.Context) {
 	ns := s.uiConfigNamespace()
 
 	existing := &corev1.ConfigMap{}
-	err := s.client.Get(ctx, types.NamespacedName{Name: uiConfigMapName, Namespace: ns}, existing)
+	err := s.reader.Get(ctx, types.NamespacedName{Name: uiConfigMapName, Namespace: ns}, existing)
 	if err != nil {
 		if !k8serrors.IsNotFound(err) {
 			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "Failed to read config"})
