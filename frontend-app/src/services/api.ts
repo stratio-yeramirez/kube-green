@@ -248,6 +248,11 @@ class ApiClient {
     await this.client.put('/ui-config', config)
   }
 
+  // Trigger manual sleep or wake for a tenant
+  async triggerManualAction(tenant: string, action: 'sleep' | 'wake', scheduleName?: string): Promise<void> {
+    await this.client.post<ApiResponse<void>>(`/schedules/${tenant}/manual`, { action, scheduleName })
+  }
+
   // Convert timezone
   async convertTimezone(
     time: string,

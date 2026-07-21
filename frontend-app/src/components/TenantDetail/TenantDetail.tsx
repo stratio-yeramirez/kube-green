@@ -27,9 +27,16 @@ import {
   Accordion,
   AccordionSummary,
   AccordionDetails,
+  Tooltip,
 } from '@mui/material'
-import { ArrowBack as ArrowBackIcon, ExpandMore as ExpandMoreIcon } from '@mui/icons-material'
-import { useSchedules, useDeleteSchedule } from '../../hooks/useTenants'
+import {
+  ArrowBack as ArrowBackIcon,
+  ExpandMore as ExpandMoreIcon,
+  PowerSettingsNew as PowerIcon,
+  WbSunny as WakeIcon,
+} from '@mui/icons-material'
+import { useSchedules, useDeleteSchedule, useSuspendedServices } from '../../hooks/useTenants'
+import { apiClient } from '../../services/api'
 import { WEEKDAY_NAMES } from '../../types'
 import { convertFromClusterToUser, convertWeekdaysFromClusterToUser } from '../../utils/timezone'
 
@@ -39,6 +46,7 @@ export default function TenantDetail() {
   const scheduleNameParam = searchParams.get('scheduleName') || ''
   const navigate = useNavigate()
   const { data, isLoading, error } = useSchedules(tenantName || '')
+  const { data: suspendedData } = useSuspendedServices(tenantName || '')
   const deleteMutation = useDeleteSchedule()
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
@@ -47,6 +55,14 @@ export default function TenantDetail() {
     scheduleName?: string
     namespace?: string
   } | null>(null)
+  const [nsActionLoading, setNsActionLoading] = useState<string | null>(null)
+
+  // Set of namespaces that currently have at least one suspended service
+  const suspendedNamespaces = useMemo(() => {
+    const s = new Set<string>()
+    suspendedData?.suspended?.forEach((svc: any) => { if (svc.namespace) s.add(svc.namespace) })
+    return s
+  }, [suspendedData])
 
   const handleDelete = async () => {
     if (!tenantName) return
@@ -286,17 +302,54 @@ export default function TenantDetail() {
                   </Typography>
                   <Chip label={`${tenantName}-${namespace}`} size="small" variant="outlined" />
                 </Box>
-                <Button
-                  variant="outlined"
-                  size="small"
-                  onClick={() =>
-                    navigate(
-                      `/schedule/edit/${tenantName}?scheduleName=${encodeURIComponent(scheduleNameParam)}&namespace=${encodeURIComponent(namespace)}`
+                <Box sx={{ display: 'flex', gap: 1 }}>
+                  {(() => {
+                    const nsKey = `${tenantName}-${namespace}`
+                    const isSleeping = suspendedNamespaces.has(nsKey) || suspendedNamespaces.has(namespace)
+                    const isLoading = nsActionLoading === namespace
+                    return (
+                      <Tooltip title={isSleeping ? 'Encender namespace' : 'Apagar namespace'}>
+                        <span>
+                          <Button
+                            variant="contained"
+                            size="small"
+                            color={isSleeping ? 'success' : 'warning'}
+                            startIcon={isLoading
+                              ? <CircularProgress size={14} color="inherit" />
+                              : isSleeping ? <WakeIcon /> : <PowerIcon />
+                            }
+                            disabled={isLoading}
+                            onClick={async () => {
+                              setNsActionLoading(namespace)
+                              try {
+                                await apiClient.triggerManualAction(
+                                  tenantName || '',
+                                  isSleeping ? 'wake' : 'sleep',
+                                  scheduleNameParam || undefined
+                                )
+                              } catch { /* ignore */ } finally {
+                                setNsActionLoading(null)
+                              }
+                            }}
+                          >
+                            {isSleeping ? 'Encender' : 'Apagar'}
+                          </Button>
+                        </span>
+                      </Tooltip>
                     )
-                  }
-                >
-                  Editar Namespace
-                </Button>
+                  })()}
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    onClick={() =>
+                      navigate(
+                        `/schedule/edit/${tenantName}?scheduleName=${encodeURIComponent(scheduleNameParam)}&namespace=${encodeURIComponent(namespace)}`
+                      )
+                    }
+                  >
+                    Editar Namespace
+                  </Button>
+                </Box>
               </Box>
               <Divider sx={{ mb: 2 }} />
               

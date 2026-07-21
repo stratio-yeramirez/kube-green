@@ -15,20 +15,25 @@ import {
   InputAdornment,
   TextField,
   Divider,
+  Tooltip,
 } from '@mui/material'
 import {
   Add as AddIcon,
   Search as SearchIcon,
   Schedule as ScheduleIcon,
   Dns as DnsIcon,
+  PowerSettingsNew as PowerIcon,
+  WbSunny as WakeIcon,
 } from '@mui/icons-material'
 import { useTenants, useAllSchedules, useAllSuspendedServices, useAllNextOperations } from '../../hooks/useTenants'
 import { useAuth } from '../../context/AuthContext'
+import { apiClient } from '../../services/api'
 
 export default function Dashboard() {
   const navigate = useNavigate()
   const { canCreateSchedule } = useAuth()
   const [search, setSearch] = useState('')
+  const [actionLoading, setActionLoading] = useState<string | null>(null)
   const { data: tenantsData, isLoading: tenantsLoading, error: tenantsError } = useTenants()
   const { data: allSchedules, isLoading: schedulesLoading } = useAllSchedules()
   const { data: allSuspended, isLoading: suspendedLoading } = useAllSuspendedServices()
@@ -86,6 +91,20 @@ export default function Dashboard() {
     })
     return Array.from(grouped.entries())
   }, [schedulesList])
+
+  // Tenants that currently have at least one suspended service
+  const sleepingTenants = useMemo(() => {
+    const sleeping = new Set<string>()
+    if (!allSuspended?.length) return sleeping
+    const suspendedNs = new Set((allSuspended as any[]).map((s) => s.namespace))
+    schedulesByTenant.forEach(([tenant, schedules]) => {
+      const tenantNs = new Set(schedules.flatMap((s: any) => Array.from(s.namespaces || [])))
+      for (const ns of tenantNs) {
+        if (suspendedNs.has(ns)) { sleeping.add(tenant); break }
+      }
+    })
+    return sleeping
+  }, [allSuspended, schedulesByTenant])
 
   // Calculate stats
   const totalSuspended = allSuspended?.length || 0
@@ -276,7 +295,7 @@ export default function Dashboard() {
                         />
                         <Chip
                           icon={<DnsIcon sx={{ fontSize: '14px !important' }} />}
-                          label={`${namespaceCount} ns`}
+                          label={`${namespaceCount} namespace${namespaceCount !== 1 ? 's' : ''}`}
                           size="small"
                           variant="outlined"
                         />
@@ -308,26 +327,59 @@ export default function Dashboard() {
                   </CardActionArea>
 
                   {/* Footer actions */}
-                  {canCreateSchedule() && (
-                    <Box sx={{ px: 2, pb: 1.5, display: 'flex', gap: 1 }}>
+                  <Box sx={{ px: 2, pb: 1.5, display: 'flex', flexDirection: 'column', gap: 1 }}>
+                    {/* Sleep / Wake button — for operacion and admin */}
+                    {canCreateSchedule() && (() => {
+                      const isSleeping = sleepingTenants.has(tenant)
+                      const isLoading = actionLoading === tenant
+                      return (
+                        <Tooltip title={isSleeping ? 'Encender todos los namespaces del tenant' : 'Apagar todos los namespaces del tenant'}>
+                          <span style={{ width: '100%' }}>
+                            <Button
+                              size="small"
+                              fullWidth
+                              variant="contained"
+                              color={isSleeping ? 'success' : 'warning'}
+                              startIcon={isLoading ? <CircularProgress size={14} color="inherit" /> : isSleeping ? <WakeIcon /> : <PowerIcon />}
+                              disabled={isLoading}
+                              onClick={async (e) => {
+                                e.stopPropagation()
+                                setActionLoading(tenant)
+                                try {
+                                  await apiClient.triggerManualAction(tenant, isSleeping ? 'wake' : 'sleep')
+                                } catch { /* ignore */ } finally {
+                                  setActionLoading(null)
+                                }
+                              }}
+                            >
+                              {isSleeping ? 'Encender' : 'Apagar'}
+                            </Button>
+                          </span>
+                        </Tooltip>
+                      )
+                    })()}
+                    {/* Navigation buttons */}
+                    <Box sx={{ display: 'flex', gap: 1 }}>
                       <Button
                         size="small"
                         variant="outlined"
                         fullWidth
-                        onClick={() => navigate(`/tenant/${tenant}`)}
+                        onClick={(e) => { e.stopPropagation(); navigate(`/tenant/${tenant}`) }}
                       >
-                        Ver detalle
+                        Namespaces
                       </Button>
-                      <Button
-                        size="small"
-                        variant="contained"
-                        fullWidth
-                        onClick={() => navigate(`/schedule/edit/${tenant}`)}
-                      >
-                        Editar
-                      </Button>
+                      {canCreateSchedule() && (
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          fullWidth
+                          onClick={(e) => { e.stopPropagation(); navigate(`/schedule/edit/${tenant}`) }}
+                        >
+                          Editar
+                        </Button>
+                      )}
                     </Box>
-                  )}
+                  </Box>
                 </Card>
               </Grid>
             )
