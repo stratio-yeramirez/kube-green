@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react'
+import React, { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Container,
@@ -6,23 +6,29 @@ import {
   Grid,
   Card,
   CardContent,
+  CardActionArea,
   Box,
   Button,
   CircularProgress,
   Alert,
   Chip,
-  Accordion,
-  AccordionSummary,
-  AccordionDetails,
+  InputAdornment,
+  TextField,
   Divider,
 } from '@mui/material'
-import { Add as AddIcon, ExpandMore as ExpandMoreIcon } from '@mui/icons-material'
+import {
+  Add as AddIcon,
+  Search as SearchIcon,
+  Schedule as ScheduleIcon,
+  Dns as DnsIcon,
+} from '@mui/icons-material'
 import { useTenants, useAllSchedules, useAllSuspendedServices, useAllNextOperations } from '../../hooks/useTenants'
 import { useAuth } from '../../context/AuthContext'
 
 export default function Dashboard() {
   const navigate = useNavigate()
   const { canCreateSchedule } = useAuth()
+  const [search, setSearch] = useState('')
   const { data: tenantsData, isLoading: tenantsLoading, error: tenantsError } = useTenants()
   const { data: allSchedules, isLoading: schedulesLoading } = useAllSchedules()
   const { data: allSuspended, isLoading: suspendedLoading } = useAllSuspendedServices()
@@ -208,109 +214,125 @@ export default function Dashboard() {
         </Grid>
       </Grid>
 
-      {/* Schedules List */}
-      <Typography variant="h5" sx={{ mb: 2 }}>
-        Schedules Activos
-      </Typography>
-      {schedulesByTenant.map(([tenant, schedules]) => {
-        const scheduleCount = schedules.length
-        const namespaceCount = new Set(
-          schedules.flatMap((schedule: any) => Array.from(schedule.namespaces || []))
-        ).size
+      {/* Tenant cards */}
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+        <Typography variant="h5">Schedules Activos</Typography>
+        <TextField
+          size="small"
+          placeholder="Buscar tenant…"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          sx={{ width: 220 }}
+          InputProps={{
+            startAdornment: (
+              <InputAdornment position="start">
+                <SearchIcon fontSize="small" />
+              </InputAdornment>
+            ),
+          }}
+        />
+      </Box>
 
-        return (
-          <Accordion key={tenant} sx={{ mb: 2 }}>
-            <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
-                <Typography variant="h6">{tenant}</Typography>
-                <Chip
-                  label={`${scheduleCount} schedule${scheduleCount !== 1 ? 's' : ''}`}
-                  size="small"
-                  color="primary"
-                />
-                <Chip
-                  label={`${namespaceCount} namespace${namespaceCount !== 1 ? 's' : ''}`}
-                  size="small"
-                  variant="outlined"
-                />
-              </Box>
-            </AccordionSummary>
-            <AccordionDetails>
-              <Grid container spacing={2}>
-                {schedules.map((schedule: any, index: number) => {
-                  const scheduleKey = `${schedule.tenant}-${schedule.scheduleName || index}`
+      <Grid container spacing={2}>
+        {schedulesByTenant
+          .filter(([tenant]) => tenant.toLowerCase().includes(search.toLowerCase()))
+          .map(([tenant, schedules]) => {
+            const scheduleCount = schedules.length
+            const namespaceCount = new Set(
+              schedules.flatMap((s: any) => Array.from(s.namespaces || []))
+            ).size
+            const visibleSchedules = schedules.slice(0, 4)
+            const hiddenCount = schedules.length - visibleSchedules.length
 
-                  return (
-                    <Grid item xs={12} key={scheduleKey}>
-                      <Card
-                        sx={{
-                          cursor: 'pointer',
-                          '&:hover': {
-                            boxShadow: 6,
-                          },
-                        }}
-                        onClick={() =>
-                          navigate(
-                            `/schedule/edit/${schedule.tenant}?scheduleName=${encodeURIComponent(schedule.scheduleName)}`
-                          )
-                        }
+            return (
+              <Grid item xs={12} sm={6} md={4} lg={3} key={tenant}>
+                <Card
+                  sx={{
+                    height: '100%',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    transition: 'box-shadow 0.2s',
+                    '&:hover': { boxShadow: 6 },
+                  }}
+                >
+                  <CardActionArea
+                    onClick={() => navigate(`/tenant/${tenant}`)}
+                    sx={{ flexGrow: 1, alignItems: 'flex-start', display: 'flex', flexDirection: 'column' }}
+                  >
+                    <CardContent sx={{ width: '100%' }}>
+                      {/* Tenant name */}
+                      <Typography variant="h6" fontWeight="bold" noWrap title={tenant} sx={{ mb: 1 }}>
+                        {tenant}
+                      </Typography>
+
+                      {/* Counters */}
+                      <Box sx={{ display: 'flex', gap: 1, mb: 1.5 }}>
+                        <Chip
+                          icon={<ScheduleIcon sx={{ fontSize: '14px !important' }} />}
+                          label={`${scheduleCount} schedule${scheduleCount !== 1 ? 's' : ''}`}
+                          size="small"
+                          color="primary"
+                          variant="outlined"
+                        />
+                        <Chip
+                          icon={<DnsIcon sx={{ fontSize: '14px !important' }} />}
+                          label={`${namespaceCount} ns`}
+                          size="small"
+                          variant="outlined"
+                        />
+                      </Box>
+
+                      <Divider sx={{ mb: 1.5 }} />
+
+                      {/* Schedule list */}
+                      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+                        {visibleSchedules.map((schedule: any, i: number) => (
+                          <Typography
+                            key={i}
+                            variant="body2"
+                            color="textSecondary"
+                            noWrap
+                            title={schedule.scheduleName}
+                            sx={{ fontSize: '0.78rem' }}
+                          >
+                            • {schedule.scheduleName}
+                          </Typography>
+                        ))}
+                        {hiddenCount > 0 && (
+                          <Typography variant="body2" color="primary" sx={{ fontSize: '0.78rem', mt: 0.5 }}>
+                            +{hiddenCount} más
+                          </Typography>
+                        )}
+                      </Box>
+                    </CardContent>
+                  </CardActionArea>
+
+                  {/* Footer actions */}
+                  {canCreateSchedule() && (
+                    <Box sx={{ px: 2, pb: 1.5, display: 'flex', gap: 1 }}>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        fullWidth
+                        onClick={() => navigate(`/tenant/${tenant}`)}
                       >
-                        <CardContent>
-                          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <Box sx={{ flexGrow: 1 }}>
-                              <Typography variant="h6" fontWeight="bold">
-                                {schedule.scheduleName || `Schedule-${schedule.tenant}`}
-                              </Typography>
-                              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 1 }}>
-                                {Array.from(schedule?.namespaces || []).map((ns: string) => (
-                                  <Chip key={ns} label={ns} size="small" variant="outlined" />
-                                ))}
-                              </Box>
-                              <Typography variant="body2" color="textSecondary" sx={{ mt: 1 }}>
-                                {Array.from(schedule.namespaces || []).length} namespace
-                                {Array.from(schedule.namespaces || []).length !== 1 ? 's' : ''}
-                              </Typography>
-                            </Box>
-                            <Box sx={{ display: 'flex', gap: 1 }}>
-                              <Button
-                                variant="outlined"
-                                size="small"
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  navigate(
-                                    `/tenant/${schedule.tenant}?scheduleName=${encodeURIComponent(schedule.scheduleName)}`
-                                  )
-                                }}
-                              >
-                                Namespaces
-                              </Button>
-                              {canCreateSchedule() && (
-                                <Button
-                                  variant="outlined"
-                                  size="small"
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    navigate(
-                                      `/schedule/edit/${schedule.tenant}?scheduleName=${encodeURIComponent(schedule.scheduleName)}`
-                                    )
-                                  }}
-                                >
-                                  Editar
-                                </Button>
-                              )}
-                            </Box>
-                          </Box>
-                        </CardContent>
-                      </Card>
-                    </Grid>
-                  )
-                })}
+                        Ver detalle
+                      </Button>
+                      <Button
+                        size="small"
+                        variant="contained"
+                        fullWidth
+                        onClick={() => navigate(`/schedule/edit/${tenant}`)}
+                      >
+                        Editar
+                      </Button>
+                    </Box>
+                  )}
+                </Card>
               </Grid>
-              <Divider sx={{ mt: 2 }} />
-            </AccordionDetails>
-          </Accordion>
-        )
-      })}
+            )
+          })}
+      </Grid>
 
       {schedulesList.length === 0 && (
         <Alert severity="info" sx={{ mt: 4 }}>
