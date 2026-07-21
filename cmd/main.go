@@ -259,6 +259,7 @@ func main() {
 		apiServer := apiv1.NewServer(apiv1.Config{
 			Port:       apiPort,
 			Client:     mgr.GetClient(),
+			APIReader:  mgr.GetAPIReader(),
 			Logger:     ctrl.Log.WithName("api"),
 			EnableCORS: enableAPICORS,
 			Namespace:  namespace,

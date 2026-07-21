@@ -36,6 +36,7 @@ var (
 // ScheduleService handles schedule operations
 type ScheduleService struct {
 	client client.Client
+	reader client.Reader // direct API reader, bypasses informer cache
 	logger logger
 }
 
@@ -50,9 +51,16 @@ type logger interface {
 }
 
 // NewScheduleService creates a new schedule service
-func NewScheduleService(c client.Client, l logger) *ScheduleService {
+func NewScheduleService(c client.Client, l logger, readers ...client.Reader) *ScheduleService {
+	var r client.Reader
+	if len(readers) > 0 && readers[0] != nil {
+		r = readers[0]
+	} else {
+		r = c
+	}
 	return &ScheduleService{
 		client: c,
+		reader: r,
 		logger: l,
 	}
 }
@@ -952,7 +960,7 @@ func (s *ScheduleService) validateScheduleNameUniqueness(ctx context.Context, na
 
 	// List all SleepInfo objects in the namespace
 	var sleepInfoList kubegreenv1alpha1.SleepInfoList
-	if err := s.client.List(ctx, &sleepInfoList, client.InNamespace(namespace)); err != nil {
+	if err := s.reader.List(ctx, &sleepInfoList, client.InNamespace(namespace)); err != nil {
 		// If namespace doesn't exist or error, skip validation (will fail later during creation)
 		return nil
 	}
@@ -970,7 +978,7 @@ func (s *ScheduleService) validateScheduleNameUniqueness(ctx context.Context, na
 // createOrUpdateSleepInfo creates or updates a SleepInfo and its associated secret
 func (s *ScheduleService) createOrUpdateSleepInfo(ctx context.Context, sleepInfo *kubegreenv1alpha1.SleepInfo, userTimezone string) error {
 	var existing kubegreenv1alpha1.SleepInfo
-	err := s.client.Get(ctx, client.ObjectKeyFromObject(sleepInfo), &existing)
+	err := s.reader.Get(ctx, client.ObjectKeyFromObject(sleepInfo), &existing)
 	if err != nil {
 		if client.IgnoreNotFound(err) == nil {
 			// Not found, create
@@ -1278,7 +1286,7 @@ type SleepInfoSummary struct {
 func (s *ScheduleService) ListSchedules(ctx context.Context) ([]ScheduleResponse, error) {
 	// List all SleepInfos across all namespaces
 	sleepInfoList := &kubegreenv1alpha1.SleepInfoList{}
-	if err := s.client.List(ctx, sleepInfoList); err != nil {
+	if err := s.reader.List(ctx, sleepInfoList); err != nil {
 		return nil, fmt.Errorf("failed to list SleepInfos: %w", err)
 	}
 
@@ -1324,7 +1332,7 @@ func (s *ScheduleService) ListSchedules(ctx context.Context) ([]ScheduleResponse
 func (s *ScheduleService) GetSchedule(ctx context.Context, tenant string, namespaceSuffix ...string) (*ScheduleResponse, error) {
 	// List all SleepInfos
 	sleepInfoList := &kubegreenv1alpha1.SleepInfoList{}
-	if err := s.client.List(ctx, sleepInfoList); err != nil {
+	if err := s.reader.List(ctx, sleepInfoList); err != nil {
 		return nil, fmt.Errorf("failed to list SleepInfos: %w", err)
 	}
 
@@ -2140,7 +2148,7 @@ func (s *ScheduleService) TriggerManualAction(ctx context.Context, tenant, actio
 	}
 
 	sleepInfoList := &kubegreenv1alpha1.SleepInfoList{}
-	if err := s.client.List(ctx, sleepInfoList); err != nil {
+	if err := s.reader.List(ctx, sleepInfoList); err != nil {
 		return fmt.Errorf("failed to list SleepInfos: %w", err)
 	}
 
@@ -2188,7 +2196,7 @@ func (s *ScheduleService) TriggerManualAction(ctx context.Context, tenant, actio
 // While suspended the cron schedule is skipped; manual actions can still override it.
 func (s *ScheduleService) SuspendSchedule(ctx context.Context, tenant, scheduleName, namespaceSuffix string, until time.Time) error {
 	sleepInfoList := &kubegreenv1alpha1.SleepInfoList{}
-	if err := s.client.List(ctx, sleepInfoList); err != nil {
+	if err := s.reader.List(ctx, sleepInfoList); err != nil {
 		return fmt.Errorf("failed to list SleepInfos: %w", err)
 	}
 
@@ -2230,7 +2238,7 @@ func (s *ScheduleService) SuspendSchedule(ctx context.Context, tenant, scheduleN
 // UnsuspendSchedule removes spec.suspendScheduleUntil from all matching SleepInfos, resuming normal cron execution.
 func (s *ScheduleService) UnsuspendSchedule(ctx context.Context, tenant, scheduleName, namespaceSuffix string) error {
 	sleepInfoList := &kubegreenv1alpha1.SleepInfoList{}
-	if err := s.client.List(ctx, sleepInfoList); err != nil {
+	if err := s.reader.List(ctx, sleepInfoList); err != nil {
 		return fmt.Errorf("failed to list SleepInfos: %w", err)
 	}
 
@@ -2293,7 +2301,7 @@ func matchesScheduleName(si kubegreenv1alpha1.SleepInfo, scheduleName string) bo
 func (s *ScheduleService) deleteSchedules(ctx context.Context, tenant, filterNamespace, scheduleName string) error {
 	// List all SleepInfos
 	sleepInfoList := &kubegreenv1alpha1.SleepInfoList{}
-	if err := s.client.List(ctx, sleepInfoList); err != nil {
+	if err := s.reader.List(ctx, sleepInfoList); err != nil {
 		return fmt.Errorf("failed to list SleepInfos: %w", err)
 	}
 
@@ -2758,7 +2766,7 @@ func (s *ScheduleService) GetAllNextOperations(ctx context.Context) (*NextOperat
 // getSleepInfosForNamespace gets all SleepInfos in a namespace
 func (s *ScheduleService) getSleepInfosForNamespace(ctx context.Context, namespace string) ([]kubegreenv1alpha1.SleepInfo, error) {
 	sleepInfoList := &kubegreenv1alpha1.SleepInfoList{}
-	if err := s.client.List(ctx, sleepInfoList, client.InNamespace(namespace)); err != nil {
+	if err := s.reader.List(ctx, sleepInfoList, client.InNamespace(namespace)); err != nil {
 		return nil, err
 	}
 	return sleepInfoList.Items, nil
@@ -3203,7 +3211,7 @@ func (s *ScheduleService) GetNamespaceSchedule(ctx context.Context, tenant, name
 
 	// List SleepInfos in the namespace
 	sleepInfoList := &kubegreenv1alpha1.SleepInfoList{}
-	if err := s.client.List(ctx, sleepInfoList, client.InNamespace(namespace)); err != nil {
+	if err := s.reader.List(ctx, sleepInfoList, client.InNamespace(namespace)); err != nil {
 		return nil, fmt.Errorf("failed to list SleepInfos: %w", err)
 	}
 
@@ -3572,7 +3580,7 @@ func (s *ScheduleService) DeleteNamespaceSchedule(ctx context.Context, tenant, n
 
 	// List all SleepInfos in the namespace
 	sleepInfoList := &kubegreenv1alpha1.SleepInfoList{}
-	if err := s.client.List(ctx, sleepInfoList, client.InNamespace(namespace)); err != nil {
+	if err := s.reader.List(ctx, sleepInfoList, client.InNamespace(namespace)); err != nil {
 		return fmt.Errorf("failed to list SleepInfos: %w", err)
 	}
 

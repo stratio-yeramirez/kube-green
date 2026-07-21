@@ -453,6 +453,80 @@ func TestTestIsTimeInDeltaMs(t *testing.T) {
 	}
 }
 
+// TestManualActionRequeueRecalculation validates that when a manual action overrides the
+// cron-scheduled operation (e.g., manual WAKE during a SLEEP window), the requeueAfter
+// is recalculated to point to the skipped operation's next fire, not the overridden one's.
+func TestManualActionRequeueRecalculation(t *testing.T) {
+	sleepInfoReconciler := SleepInfoReconciler{
+		Log:        zap.New(zap.UseDevMode(true)),
+		SleepDelta: 60,
+	}
+
+	tests := []struct {
+		name                 string
+		now                  string
+		data                 SleepInfoData
+		manualOpType         string
+		wantNextSchedule     string
+		wantRequeueAfter     time.Duration
+	}{
+		{
+			// Cron fires SLEEP at :05. Manual action forces WAKE instead.
+			// After manual WAKE, next should be SLEEP (CurrentOperationSchedule), not WAKE again.
+			name: "manual WAKE overrides scheduled SLEEP - requeueAfter points to next SLEEP",
+			now:  "2021-03-23T20:05:30.000Z",
+			data: SleepInfoData{
+				CurrentOperationSchedule: "5 * * * *",  // SLEEP schedule (the one being overridden)
+				NextOperationSchedule:    "20 * * * *", // WAKE schedule
+				CurrentOperationType:     sleepOperation,
+				LastSchedule:             getTime(t, "2021-03-23T19:20:00.000Z"),
+			},
+			manualOpType:     wakeUpOperation,
+			wantNextSchedule: "2021-03-23T21:05:00Z", // next SLEEP after now+delta
+			wantRequeueAfter: 59*time.Minute + 30*time.Second,
+		},
+		{
+			// Cron fires WAKE at :20. Manual action forces SLEEP instead.
+			// After manual SLEEP, next should be WAKE (CurrentOperationSchedule), not SLEEP again.
+			name: "manual SLEEP overrides scheduled WAKE - requeueAfter points to next WAKE",
+			now:  "2021-03-23T20:20:30.000Z",
+			data: SleepInfoData{
+				CurrentOperationSchedule: "20 * * * *", // WAKE schedule (the one being overridden)
+				NextOperationSchedule:    "5 * * * *",  // SLEEP schedule
+				CurrentOperationType:     wakeUpOperation,
+				LastSchedule:             getTime(t, "2021-03-23T20:05:00.000Z"),
+			},
+			manualOpType:     sleepOperation,
+			wantNextSchedule: "2021-03-23T21:20:00Z", // next WAKE after now+delta
+			wantRequeueAfter: 59*time.Minute + 30*time.Second,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			now := getTime(t, test.now)
+			scheduleDelta := time.Duration(sleepInfoReconciler.SleepDelta) * time.Second
+
+			cronIsToExecute, _, _, err := sleepInfoReconciler.getNextSchedule(sleepInfoReconciler.Log, test.data, now)
+			require.NoError(t, err)
+			require.True(t, cronIsToExecute, "cron must be in execute window for this test to be meaningful")
+
+			// Simulate manual action changing the operation type
+			require.NotEqual(t, test.data.CurrentOperationType, test.manualOpType,
+				"manual op must differ from cron op for recalculation to trigger")
+
+			// Apply the recalculation (mirrors the fix in Reconcile)
+			nextOpSched, parseErr := getCronParsed(test.data.CurrentOperationSchedule)
+			require.NoError(t, parseErr)
+			nextSchedule := nextOpSched.Next(now.Add(scheduleDelta))
+			requeueAfter := getRequeueAfter(nextSchedule, now)
+
+			require.Equal(t, test.wantNextSchedule, nextSchedule.Format(time.RFC3339))
+			require.Equal(t, test.wantRequeueAfter, requeueAfter)
+		})
+	}
+}
+
 func getTime(t *testing.T, mockNowRaw string) time.Time {
 	t.Helper()
 	now, err := time.Parse(time.RFC3339, mockNowRaw)

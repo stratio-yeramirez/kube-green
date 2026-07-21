@@ -7,6 +7,7 @@ package v1alpha1
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/kube-green/kube-green/internal/patcher"
 
@@ -122,6 +123,13 @@ type SleepInfoSpec struct {
 	// +optional
 	// +operator-sdk:csv:customresourcedefinitions:type=spec
 	Patches []Patch `json:"patches,omitempty"`
+	// SuspendScheduleUntil temporarily suspends the cron schedule until the given time.
+	// While suspended, neither sleep nor wake cron triggers will execute.
+	// Manual actions (via kube-green.stratio.com/manual-action annotation) still override the suspension.
+	// Set to nil or a past time to resume normal scheduling.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
+	SuspendScheduleUntil *metav1.Time `json:"suspendScheduleUntil,omitempty"`
 }
 
 type Patch struct {
@@ -164,6 +172,11 @@ type SleepInfoStatus struct {
 	// +optional
 	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Operation Type"
 	OperationType string `json:"operation,omitempty"`
+	// SuspendedUntil reflects the current suspension deadline, mirrored from spec.suspendScheduleUntil.
+	// Cleared automatically once the deadline has passed.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Suspended Until"
+	SuspendedUntil *metav1.Time `json:"suspendedUntil,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -276,6 +289,15 @@ func (s SleepInfo) IsKafkaToSuspend() bool {
 		return false
 	}
 	return *s.Spec.SuspendStatefulSetsKafka
+}
+
+// IsSuspendedUntil returns true if the schedule is temporarily suspended at the given time.
+// A suspension is active when SuspendScheduleUntil is set and its time is in the future relative to now.
+func (s SleepInfo) IsSuspendedUntil(now time.Time) bool {
+	if s.Spec.SuspendScheduleUntil == nil {
+		return false
+	}
+	return now.Before(s.Spec.SuspendScheduleUntil.Time)
 }
 
 func (s SleepInfo) GetPatches() []Patch {

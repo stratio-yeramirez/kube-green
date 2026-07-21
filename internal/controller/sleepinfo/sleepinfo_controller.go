@@ -127,6 +127,7 @@ func (r *SleepInfoReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		log.Error(err, "unable to update deployment with 0 replicas")
 		return ctrl.Result{}, err
 	}
+	cronIsToExecute := isToExecute
 
 	if manualAction == "sleep" || manualAction == "wake" {
 		manualActionValid = true
@@ -145,6 +146,7 @@ func (r *SleepInfoReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	if manualActionValid {
+		originalOperationType := sleepInfoData.CurrentOperationType
 		if manualAction == "sleep" {
 			sleepInfoData.CurrentOperationType = sleepOperation
 		} else {
@@ -152,6 +154,36 @@ func (r *SleepInfoReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		}
 		isToExecute = true
 		log.Info("manual action requested", "action", manualAction, "sleepinfo", sleepInfo.Name)
+
+		// When the cron schedule was already in execute window but the manual action overrides
+		// with the opposite operation, getNextSchedule already advanced nextSchedule to the
+		// next operation in the original sequence (which is now the wrong one). Recalculate
+		// using CurrentOperationSchedule so requeueAfter points to the skipped operation.
+		if cronIsToExecute && sleepInfoData.CurrentOperationType != originalOperationType {
+			if nextOpSched, parseErr := getCronParsed(sleepInfoData.CurrentOperationSchedule); parseErr == nil {
+				scheduleDelta := time.Duration(r.SleepDelta) * time.Second
+				nextSchedule = nextOpSched.Next(now.Add(scheduleDelta))
+				requeueAfter = getRequeueAfter(nextSchedule, now)
+				log.Info("manual action overrides scheduled operation, requeueAfter recalculated",
+					"originalOp", originalOperationType,
+					"manualOp", sleepInfoData.CurrentOperationType,
+					"requeueAfter", requeueAfter,
+				)
+			}
+		}
+	}
+	// Suspension check: skip cron schedule if suspended unless a manual action is active.
+	// Manual actions (kube-green.stratio.com/manual-action annotation) always override the suspension.
+	if !manualActionValid && sleepInfo.IsSuspendedUntil(now) {
+		until := sleepInfo.Spec.SuspendScheduleUntil.Time
+		suspendRequeue := time.Until(until)
+		log.Info("schedule temporarily suspended",
+			"suspendedUntil", until,
+			"requeueAfter", suspendRequeue,
+			"sleepinfo", sleepInfo.Name,
+		)
+		r.reconcilePairedStatus(ctx, log, sleepInfo, req.Namespace)
+		return ctrl.Result{RequeueAfter: suspendRequeue}, nil
 	}
 	scheduleLog := log.WithValues("now", r.Now(), "next run", nextSchedule, "requeue", requeueAfter)
 

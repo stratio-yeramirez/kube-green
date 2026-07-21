@@ -73,7 +73,7 @@ export default function ScheduleEditor() {
     weekdaysWake: '0-6', // Por defecto: todos los días
     namespaces: [],
     delays: {
-      suspendDeployments: '5m',
+      suspendDeployments: '10m',
       suspendStatefulSets: '7m',
       suspendCronJobs: '0m',
       suspendDeploymentsPgbouncer: '5m',
@@ -1642,7 +1642,7 @@ export default function ScheduleEditor() {
                   <TextField
                     fullWidth
                     label="Delay Deployments"
-                    value={formData.delays?.suspendDeployments || '5m'}
+                    value={formData.delays?.suspendDeployments || '10m'}
                     onChange={(e) =>
                       setFormData({
                         ...formData,

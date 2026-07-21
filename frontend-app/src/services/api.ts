@@ -236,6 +236,13 @@ class ApiClient {
     await this.client.delete<ApiResponse<void>>(`/users/${username}`)
   }
 
+  // Get UI configuration (env color, label, etc.)
+  async getUIConfig(): Promise<{ envName: string; envColor: string; envLabel: string; clusterName: string }> {
+    const base = import.meta.env.VITE_API_URL || ''
+    const response = await fetch(`${base}/api/v1/ui-config`)
+    return response.json()
+  }
+
   // Convert timezone
   async convertTimezone(
     time: string,

@@ -70,6 +70,16 @@ spec:
         - name: AUTH_ENABLED
           value: "false"
         {{- end }}
+        - name: ENV_NAME
+          value: {{ .Values.manager.env.name | default "dev" | quote }}
+        - name: ENV_COLOR
+          value: {{ .Values.manager.env.color | default "#1e3c72" | quote }}
+        - name: ENV_LABEL
+          value: {{ .Values.manager.env.label | default "Desarrollo" | quote }}
+        {{- if .Values.manager.env.clusterName }}
+        - name: CLUSTER_NAME
+          value: {{ .Values.manager.env.clusterName | quote }}
+        {{- end }}
         command:
         - /kube-green
         image: {{ include "image" .Values.manager.image }}

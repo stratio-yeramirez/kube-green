@@ -41,6 +41,7 @@ type Server struct {
 type Config struct {
 	Port       int
 	Client     client.Client
+	APIReader  client.Reader // optional direct API reader, bypasses informer cache
 	Logger     logr.Logger
 	EnableCORS bool
 	Namespace  string // Kubernetes namespace for loading secrets
@@ -67,7 +68,7 @@ func NewServer(config Config) *Server {
 		logger:          config.Logger,
 		router:          router,
 		port:            config.Port,
-		scheduleService: NewScheduleService(config.Client, config.Logger),
+		scheduleService: NewScheduleService(config.Client, config.Logger, config.APIReader),
 	}
 
 	// Initialize authentication if enabled
@@ -122,6 +123,7 @@ func (s *Server) setupRoutes() {
 	s.router.GET("/health", s.handleHealth)
 	s.router.GET("/ready", s.handleReady)
 	s.router.GET("/api/v1/info", s.handleInfo)
+	s.router.GET("/api/v1/ui-config", s.handleGetUIConfig)
 
 	// Authentication endpoints (public, no auth required)
 	// Always register routes, handler will initialize auth if needed
@@ -160,6 +162,8 @@ func (s *Server) setupRoutes() {
 		v1.GET("/:tenant/next", s.handleGetNextOperation)
 		v1.POST("", s.handleCreateSchedule)
 		v1.POST("/:tenant/manual", s.handleManualScheduleAction)
+		v1.POST("/:tenant/suspend", s.handleSuspendSchedule)
+		v1.DELETE("/:tenant/suspend", s.handleUnsuspendSchedule)
 		v1.PUT("/:tenant", s.handleUpdateSchedule)
 		v1.DELETE("/:tenant", s.handleDeleteSchedule)
 

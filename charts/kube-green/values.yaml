@@ -43,6 +43,14 @@ manager:
     port: 8080
     cors: true
 
+  # Environment identification — shown in the frontend header as a colored badge.
+  # Set these per-cluster to quickly differentiate dev / test / prod.
+  env:
+    name: "dev"             # dev | test | prod  (ENV_NAME)
+    color: "#1e3c72"        # hex color for the AppBar (ENV_COLOR)
+    label: "Desarrollo"     # label shown in the badge (ENV_LABEL)
+    clusterName: ""         # optional cluster name (CLUSTER_NAME)
+
   auth:
     enabled: true
     jwtSecretName: "kube-green-jwt"

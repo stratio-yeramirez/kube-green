@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/kube-green/kube-green/internal/api/v1/auth"
@@ -409,6 +411,14 @@ type ManualScheduleRequest struct {
 	Namespace    string `json:"namespace,omitempty"`       // Optional: target namespace suffix
 }
 
+// SuspendScheduleRequest represents a request to temporarily suspend a cron schedule
+type SuspendScheduleRequest struct {
+	// Until is the RFC3339 datetime until which the schedule is suspended (e.g. "2026-06-30T00:00:00Z")
+	Until        string `json:"until" binding:"required"`
+	ScheduleName string `json:"scheduleName,omitempty"` // Optional: target specific schedule name
+	Namespace    string `json:"namespace,omitempty"`    // Optional: target namespace suffix
+}
+
 // handleUpdateSchedule updates an existing schedule
 // @Summary Update a schedule
 // @Description Updates SleepInfo configurations for a tenant. Missing fields are extracted from existing schedule. At least 'off' or 'on' time must be provided.
@@ -612,6 +622,159 @@ func (s *Server) handleManualScheduleAction(c *gin.Context) {
 	c.JSON(http.StatusOK, APIResponse{
 		Success: true,
 		Message: fmt.Sprintf("Manual action '%s' triggered successfully for tenant %s", req.Action, tenant),
+	})
+}
+
+// handleSuspendSchedule temporarily suspends a cron schedule until a specified date/time.
+// @Summary Suspend a schedule temporarily
+// @Description Sets spec.suspendScheduleUntil on matching SleepInfos. Cron sleep/wake triggers are skipped until the deadline. Manual actions still work.
+// @Tags Schedules
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param tenant path string true "Tenant name" example:"bdadevdat"
+// @Param request body SuspendScheduleRequest true "Suspend request payload"
+// @Success 200 {object} APIResponse "Schedule suspended successfully"
+// @Failure 400 {object} ErrorResponse "Invalid request parameters"
+// @Failure 403 {object} ErrorResponse "Insufficient permissions"
+// @Failure 404 {object} ErrorResponse "Schedule not found"
+// @Failure 500 {object} ErrorResponse "Internal server error"
+// @Router /api/v1/schedules/{tenant}/suspend [post]
+func (s *Server) handleSuspendSchedule(c *gin.Context) {
+	role, exists := c.Get("role")
+	if !exists || !auth.CanCreateSchedule(role.(string)) {
+		c.JSON(http.StatusForbidden, ErrorResponse{
+			Success: false,
+			Error:   "Insufficient permissions. Only admin and operacion roles can suspend schedules",
+			Code:    http.StatusForbidden,
+		})
+		return
+	}
+
+	tenant := c.Param("tenant")
+	if tenant == "" {
+		c.JSON(http.StatusBadRequest, ErrorResponse{
+			Success: false,
+			Error:   "tenant parameter is required",
+			Code:    http.StatusBadRequest,
+		})
+		return
+	}
+
+	var req SuspendScheduleRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{
+			Success: false,
+			Error:   err.Error(),
+			Code:    http.StatusBadRequest,
+		})
+		return
+	}
+
+	until, err := time.Parse(time.RFC3339, req.Until)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{
+			Success: false,
+			Error:   fmt.Sprintf("invalid 'until' format, expected RFC3339 (e.g. 2026-06-30T00:00:00Z): %v", err),
+			Code:    http.StatusBadRequest,
+		})
+		return
+	}
+
+	if until.Before(time.Now()) {
+		c.JSON(http.StatusBadRequest, ErrorResponse{
+			Success: false,
+			Error:   "'until' must be a future date",
+			Code:    http.StatusBadRequest,
+		})
+		return
+	}
+
+	if err := s.scheduleService.SuspendSchedule(c.Request.Context(), tenant, req.ScheduleName, req.Namespace, until); err != nil {
+		s.logger.Error(err, "failed to suspend schedule", "tenant", tenant)
+		if strings.Contains(err.Error(), "no schedules found") {
+			c.JSON(http.StatusNotFound, ErrorResponse{
+				Success: false,
+				Error:   err.Error(),
+				Code:    http.StatusNotFound,
+			})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, ErrorResponse{
+			Success: false,
+			Error:   fmt.Sprintf("Failed to suspend schedule: %v", err),
+			Code:    http.StatusInternalServerError,
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, APIResponse{
+		Success: true,
+		Message: fmt.Sprintf("Schedule suspended until %s for tenant %s", until.Format(time.RFC3339), tenant),
+	})
+}
+
+// handleUnsuspendSchedule removes a temporary suspension from a schedule.
+// @Summary Remove schedule suspension
+// @Description Clears spec.suspendScheduleUntil on matching SleepInfos, resuming normal cron execution immediately.
+// @Tags Schedules
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param tenant path string true "Tenant name" example:"bdadevdat"
+// @Param namespace query string false "Namespace suffix (optional)" example:"apps"
+// @Param scheduleName query string false "Schedule name (optional)" example:"apagado-tenant-bdaqa"
+// @Success 200 {object} APIResponse "Schedule suspension removed successfully"
+// @Failure 400 {object} ErrorResponse "Invalid request parameters"
+// @Failure 403 {object} ErrorResponse "Insufficient permissions"
+// @Failure 404 {object} ErrorResponse "Schedule not found"
+// @Failure 500 {object} ErrorResponse "Internal server error"
+// @Router /api/v1/schedules/{tenant}/suspend [delete]
+func (s *Server) handleUnsuspendSchedule(c *gin.Context) {
+	role, exists := c.Get("role")
+	if !exists || !auth.CanCreateSchedule(role.(string)) {
+		c.JSON(http.StatusForbidden, ErrorResponse{
+			Success: false,
+			Error:   "Insufficient permissions. Only admin and operacion roles can unsuspend schedules",
+			Code:    http.StatusForbidden,
+		})
+		return
+	}
+
+	tenant := c.Param("tenant")
+	if tenant == "" {
+		c.JSON(http.StatusBadRequest, ErrorResponse{
+			Success: false,
+			Error:   "tenant parameter is required",
+			Code:    http.StatusBadRequest,
+		})
+		return
+	}
+
+	namespaceSuffix := c.Query("namespace")
+	scheduleName := c.Query("scheduleName")
+
+	if err := s.scheduleService.UnsuspendSchedule(c.Request.Context(), tenant, scheduleName, namespaceSuffix); err != nil {
+		s.logger.Error(err, "failed to unsuspend schedule", "tenant", tenant)
+		if strings.Contains(err.Error(), "no schedules found") {
+			c.JSON(http.StatusNotFound, ErrorResponse{
+				Success: false,
+				Error:   err.Error(),
+				Code:    http.StatusNotFound,
+			})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, ErrorResponse{
+			Success: false,
+			Error:   fmt.Sprintf("Failed to unsuspend schedule: %v", err),
+			Code:    http.StatusInternalServerError,
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, APIResponse{
+		Success: true,
+		Message: fmt.Sprintf("Schedule suspension removed for tenant %s", tenant),
 	})
 }
 
@@ -1305,4 +1468,34 @@ type NamespaceScheduleRequest struct {
 type NamespaceExclusion struct {
 	Namespace string          `json:"namespace"`
 	Filter    ExclusionFilter `json:"filter"`
+}
+
+// handleGetUIConfig returns UI configuration for the frontend (env name, color, etc.)
+// @Summary Get UI configuration
+// @Description Returns environment-specific UI configuration (colors, labels) read from env vars ENV_NAME, ENV_COLOR, ENV_LABEL
+// @Tags config
+// @Produce json
+// @Success 200 {object} map[string]string
+// @Router /ui-config [get]
+func (s *Server) handleGetUIConfig(c *gin.Context) {
+	envName := os.Getenv("ENV_NAME")
+	if envName == "" {
+		envName = "dev"
+	}
+	envColor := os.Getenv("ENV_COLOR")
+	if envColor == "" {
+		envColor = "#1e3c72"
+	}
+	envLabel := os.Getenv("ENV_LABEL")
+	if envLabel == "" {
+		envLabel = "Desarrollo"
+	}
+	clusterName := os.Getenv("CLUSTER_NAME")
+
+	c.JSON(http.StatusOK, gin.H{
+		"envName":     envName,
+		"envColor":    envColor,
+		"envLabel":    envLabel,
+		"clusterName": clusterName,
+	})
 }
