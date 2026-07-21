@@ -35,6 +35,7 @@ func JWTAuthMiddleware(secret []byte, enabled bool) gin.HandlerFunc {
 			"/ready",
 			"/api/v1/auth/login",
 			"/api/v1/auth/refresh",
+			"/api/v1/ui-config",
 			"/swagger",
 		}
 		

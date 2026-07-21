@@ -3,7 +3,7 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 
 # Accept build arguments for Vite environment variables
-ARG VITE_AUTH_ENABLED=false
+ARG VITE_AUTH_ENABLED=true
 ENV VITE_AUTH_ENABLED=$VITE_AUTH_ENABLED
 
 # Copy package files
