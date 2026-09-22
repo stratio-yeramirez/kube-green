@@ -1325,7 +1325,7 @@ type SleepInfoSummary struct {
 	Weekdays             string            `json:"weekdays"`
 	TimeZone             string            `json:"timeZone"`     // Cluster timezone (always "UTC")
 	UserTimezone         string            `json:"userTimezone"` // User timezone (e.g. "America/Bogota") — authoritative source, no annotation parsing needed
-	Resources            []string          `json:"resources"` // List of resources managed (Postgres, HDFS, PgBouncer, Deployments, etc.)
+	Resources            []string          `json:"resources"`    // List of resources managed (Postgres, HDFS, PgBouncer, Deployments, etc.)
 	WakeTime             string            `json:"wakeTime,omitempty"`
 	ScheduleName         string            `json:"scheduleName,omitempty"` // Schedule name if set
 	Description          string            `json:"description,omitempty"`  // Schedule description if set
@@ -2338,7 +2338,8 @@ func (s *ScheduleService) UnsuspendSchedule(ctx context.Context, tenant, schedul
 	return nil
 }
 
-func matchesScheduleName(si kubegreenv1alpha1.SleepInfo, scheduleName string) bool {	if scheduleName == "" {
+func matchesScheduleName(si kubegreenv1alpha1.SleepInfo, scheduleName string) bool {
+	if scheduleName == "" {
 		return true
 	}
 	if si.Annotations != nil {

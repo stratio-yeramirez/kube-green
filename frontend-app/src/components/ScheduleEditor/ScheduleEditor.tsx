@@ -269,8 +269,8 @@ export default function ScheduleEditor() {
           )
           const firstInfo = sleepInfo || wakeInfo || filteredSleepInfos[0]
 
-          const sleepTimeUTC = sleepInfo?.sleepAt || sleepInfo?.time || sleepInfo?.Time || null
-          const wakeTimeUTC = wakeInfo?.wakeUpAt || wakeInfo?.sleepAt || wakeInfo?.time || wakeInfo?.Time || null
+          const sleepTimeUTC = sleepInfo?.sleepAt || sleepInfo?.time || null
+          const wakeTimeUTC = wakeInfo?.wakeUpAt || wakeInfo?.sleepAt || wakeInfo?.time || null
           const timeZone = sleepInfo?.timeZone || wakeInfo?.timeZone || firstInfo?.timeZone || null
           const extractedUserTimezone =
             sleepInfo?.userTimezone ||
@@ -280,8 +280,8 @@ export default function ScheduleEditor() {
             formData.userTimezone ||
             timeZone || 'UTC'
 
-          const sleepWeekdaysStr = sleepInfo?.weekdays || sleepInfo?.Weekdays
-          const wakeWeekdaysStr = wakeInfo?.weekdays || wakeInfo?.Weekdays
+          const sleepWeekdaysStr = sleepInfo?.weekdays
+          const wakeWeekdaysStr = wakeInfo?.weekdays
 
           if (sleepWeekdaysStr) {
             setSelectedSleepWeekdays(parseWeekdays(sleepWeekdaysStr))
@@ -568,7 +568,7 @@ export default function ScheduleEditor() {
             if (datastoresNS && namespaces.includes('datastores')) {
               const datastoresSchedules = Array.isArray(datastoresNS)
                 ? datastoresNS
-                : (datastoresNS.schedule || [])
+                : ((datastoresNS as any).schedule || [])
 
               // Caso A: weekdays DIFERENTES → SleepInfos separados con role="wake"
               const wakeRoleSchedules = datastoresSchedules.filter((s: any) =>
@@ -1102,8 +1102,8 @@ export default function ScheduleEditor() {
 
         targetNamespaces.forEach((namespace) => {
           const namespaceInfo = (existingSchedule.namespaces || {})[namespace]
-          const schedules = namespaceInfo?.schedule || namespaceInfo || []
-          const scheduleArray = Array.isArray(schedules) ? schedules : (schedules.schedule || [])
+          const schedules = (namespaceInfo as any)?.schedule || namespaceInfo || []
+          const scheduleArray = Array.isArray(schedules) ? schedules : ((schedules as any).schedule || [])
 
           const schedulesByName = new Map<string, { sleep?: any; wake?: any }>()
 
@@ -1837,7 +1837,7 @@ export default function ScheduleEditor() {
                                   // Si no hay label key seleccionado, seleccionar el primero disponible
                                   const firstLabel = Object.entries(service.labels)[0]
                                   newExclusions[index].labelKey = firstLabel[0]
-                                  newExclusions[index].labelValue = firstLabel[1]
+                                  newExclusions[index].labelValue = firstLabel[1] as string
                                 } else {
                                   // Si el servicio no tiene el label key, limpiar
                                   newExclusions[index].labelKey = ''

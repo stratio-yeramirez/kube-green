@@ -63,7 +63,3 @@ func CanDeleteSchedule(role string) bool {
 func CanManageUsers(role string) bool {
 	return role == RoleAdmin
 }
-
-
-
-

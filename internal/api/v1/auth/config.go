@@ -44,7 +44,3 @@ func IsAuthEnabled() bool {
 	authEnabled := os.Getenv("AUTH_ENABLED")
 	return authEnabled == "true" || authEnabled == "1"
 }
-
-
-
-

@@ -127,6 +127,15 @@ export interface SleepInfoDetail {
   suspendStatefulSetsHdfs?: boolean
   excludeRef?: ExclusionFilter[]
   annotations?: Record<string, string>
+  // Campos que devuelve SleepInfoSummary del backend (internal/api/v1/schedule_service.go)
+  operation?: string
+  time?: string
+  userTimezone?: string
+  resources?: string[]
+  wakeTime?: string
+  scheduleName?: string
+  description?: string
+  suspendScheduleUntil?: string
 }
 
 export interface NamespaceScheduleResponse {

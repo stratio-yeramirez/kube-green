@@ -463,12 +463,12 @@ func TestManualActionRequeueRecalculation(t *testing.T) {
 	}
 
 	tests := []struct {
-		name                 string
-		now                  string
-		data                 SleepInfoData
-		manualOpType         string
-		wantNextSchedule     string
-		wantRequeueAfter     time.Duration
+		name             string
+		now              string
+		data             SleepInfoData
+		manualOpType     string
+		wantNextSchedule string
+		wantRequeueAfter time.Duration
 	}{
 		{
 			// Cron fires SLEEP at :05. Manual action forces WAKE instead.

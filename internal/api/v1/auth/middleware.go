@@ -22,13 +22,13 @@ func JWTAuthMiddleware(secret []byte, enabled bool) gin.HandlerFunc {
 
 		path := c.Request.URL.Path
 		method := c.Request.Method
-		
+
 		// Allow OPTIONS requests for CORS preflight
 		if method == "OPTIONS" {
 			c.Next()
 			return
 		}
-		
+
 		// Allow public paths - check this FIRST before any Authorization header validation
 		publicPaths := []string{
 			"/health",
@@ -38,13 +38,13 @@ func JWTAuthMiddleware(secret []byte, enabled bool) gin.HandlerFunc {
 			"/api/v1/ui-config",
 			"/swagger",
 		}
-		
+
 		// Documentation paths - accessible without auth, but can accept token if provided
 		documentationPaths := []string{
 			"/docs",
 			"/documentation",
 		}
-		
+
 		// Check if path is public - this MUST be done before checking Authorization header
 		// This allows login/refresh endpoints to work even if Swagger sends an Authorization header
 		isPublic := false
@@ -54,13 +54,13 @@ func JWTAuthMiddleware(secret []byte, enabled bool) gin.HandlerFunc {
 				break
 			}
 		}
-		
+
 		if isPublic {
 			// For public paths, skip authentication entirely - don't check Authorization header
 			c.Next()
 			return
 		}
-		
+
 		// Check if path is documentation - allow access without auth, but validate token if provided
 		isDocumentation := false
 		for _, docPath := range documentationPaths {
@@ -69,7 +69,7 @@ func JWTAuthMiddleware(secret []byte, enabled bool) gin.HandlerFunc {
 				break
 			}
 		}
-		
+
 		if isDocumentation {
 			// For documentation, check if token is provided (optional)
 			authHeader := c.GetHeader("Authorization")
@@ -132,4 +132,3 @@ func JWTAuthMiddleware(secret []byte, enabled bool) gin.HandlerFunc {
 		c.Next()
 	}
 }
-

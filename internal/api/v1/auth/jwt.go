@@ -93,4 +93,3 @@ func ValidateToken(tokenString string, secret []byte) (*Claims, error) {
 
 	return nil, jwt.ErrSignatureInvalid
 }
-

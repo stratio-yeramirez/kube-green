@@ -275,18 +275,18 @@ func (s *Server) handleGetSchedule(c *gin.Context) {
 // CreateScheduleRequest represents a request to create a schedule
 // @Description Request to create a new sleep/wake schedule for a tenant
 type CreateScheduleRequest struct {
-	Tenant        string       `json:"tenant" binding:"required" example:"bdadevdat"`                      // Tenant name (e.g., bdadevdat, bdadevprd)
-	Off           string       `json:"off" binding:"required" example:"22:00"`                             // Sleep time in local timezone (HH:MM format, 24-hour)
-	On            string       `json:"on" binding:"required" example:"06:00"`                              // Wake time in local timezone (HH:MM format, 24-hour)
-	Weekdays      string       `json:"weekdays,omitempty" example:"lunes-viernes"`                         // Days of week (human format: "lunes-viernes", or numeric: "1-5")
-	SleepDays     string       `json:"sleepDays,omitempty" example:"viernes"`                              // Optional: specific days for sleep (overrides weekdays)
-	WakeDays      string       `json:"wakeDays,omitempty" example:"lunes"`                                 // Optional: specific days for wake (overrides weekdays)
-	WeekdaysSleep string       `json:"weekdaysSleep,omitempty" example:"viernes"`                          // Frontend format: specific days for sleep (mapped to SleepDays)
-	WeekdaysWake  string       `json:"weekdaysWake,omitempty" example:"lunes"`                             // Frontend format: specific days for wake (mapped to WakeDays)
-	Namespaces    []string     `json:"namespaces,omitempty" example:"datastores,apps"`                     // Optional: limit to specific namespaces (datastores, apps, rocket, intelligence, airflowsso)
-	Delays        *DelayConfig `json:"delays,omitempty"`                                                   // Optional: custom delays for staggered wake-up (e.g., {"pgHdfsDelay": "0m", "pgbouncerDelay": "5m", "deploymentsDelay": "7m"})
-	ScheduleName  string       `json:"scheduleName,omitempty" example:"horario-laboral"`                   // Optional: name to identify this schedule (allows multiple schedules per namespace)
-	Description   string       `json:"description,omitempty" example:"Horario laboral de lunes a viernes"` // Optional: description of the schedule
+	Tenant                      string               `json:"tenant" binding:"required" example:"bdadevdat"`                      // Tenant name (e.g., bdadevdat, bdadevprd)
+	Off                         string               `json:"off" binding:"required" example:"22:00"`                             // Sleep time in local timezone (HH:MM format, 24-hour)
+	On                          string               `json:"on" binding:"required" example:"06:00"`                              // Wake time in local timezone (HH:MM format, 24-hour)
+	Weekdays                    string               `json:"weekdays,omitempty" example:"lunes-viernes"`                         // Days of week (human format: "lunes-viernes", or numeric: "1-5")
+	SleepDays                   string               `json:"sleepDays,omitempty" example:"viernes"`                              // Optional: specific days for sleep (overrides weekdays)
+	WakeDays                    string               `json:"wakeDays,omitempty" example:"lunes"`                                 // Optional: specific days for wake (overrides weekdays)
+	WeekdaysSleep               string               `json:"weekdaysSleep,omitempty" example:"viernes"`                          // Frontend format: specific days for sleep (mapped to SleepDays)
+	WeekdaysWake                string               `json:"weekdaysWake,omitempty" example:"lunes"`                             // Frontend format: specific days for wake (mapped to WakeDays)
+	Namespaces                  []string             `json:"namespaces,omitempty" example:"datastores,apps"`                     // Optional: limit to specific namespaces (datastores, apps, rocket, intelligence, airflowsso)
+	Delays                      *DelayConfig         `json:"delays,omitempty"`                                                   // Optional: custom delays for staggered wake-up (e.g., {"pgHdfsDelay": "0m", "pgbouncerDelay": "5m", "deploymentsDelay": "7m"})
+	ScheduleName                string               `json:"scheduleName,omitempty" example:"horario-laboral"`                   // Optional: name to identify this schedule (allows multiple schedules per namespace)
+	Description                 string               `json:"description,omitempty" example:"Horario laboral de lunes a viernes"` // Optional: description of the schedule
 	Apply                       bool                 `json:"apply,omitempty"`                                                    // Always applies to cluster (field is ignored but kept for compatibility)
 	IgnoreExternalModifications bool                 `json:"ignoreExternalModifications,omitempty"`                              // Ignored: always set to true in service layer
 	Exclusions                  []NamespaceExclusion `json:"exclusions,omitempty"`                                               // Optional: user-defined label exclusions per namespace
@@ -398,13 +398,13 @@ func (s *Server) handleCreateSchedule(c *gin.Context) {
 // UpdateScheduleRequest represents a request to update a schedule
 // @Description Request to update an existing sleep/wake schedule for a tenant (all fields optional)
 type UpdateScheduleRequest struct {
-	Off           string   `json:"off,omitempty" example:"23:00"`             // Sleep time in local timezone (HH:MM format, 24-hour)
-	On            string   `json:"on,omitempty" example:"07:00"`              // Wake time in local timezone (HH:MM format, 24-hour)
-	Weekdays      string   `json:"weekdays,omitempty" example:"1-5"`          // Days of week (human format: "lunes-viernes", or numeric: "1-5")
-	SleepDays     string   `json:"sleepDays,omitempty" example:"viernes"`     // Optional: specific days for sleep (overrides weekdays)
-	WakeDays      string   `json:"wakeDays,omitempty" example:"lunes"`        // Optional: specific days for wake (overrides weekdays)
-	WeekdaysSleep string   `json:"weekdaysSleep,omitempty" example:"viernes"` // Frontend format: specific days for sleep (mapped to sleepDays)
-	WeekdaysWake  string   `json:"weekdaysWake,omitempty" example:"lunes"`    // Frontend format: specific days for wake (mapped to wakeDays)
+	Off           string               `json:"off,omitempty" example:"23:00"`             // Sleep time in local timezone (HH:MM format, 24-hour)
+	On            string               `json:"on,omitempty" example:"07:00"`              // Wake time in local timezone (HH:MM format, 24-hour)
+	Weekdays      string               `json:"weekdays,omitempty" example:"1-5"`          // Days of week (human format: "lunes-viernes", or numeric: "1-5")
+	SleepDays     string               `json:"sleepDays,omitempty" example:"viernes"`     // Optional: specific days for sleep (overrides weekdays)
+	WakeDays      string               `json:"wakeDays,omitempty" example:"lunes"`        // Optional: specific days for wake (overrides weekdays)
+	WeekdaysSleep string               `json:"weekdaysSleep,omitempty" example:"viernes"` // Frontend format: specific days for sleep (mapped to sleepDays)
+	WeekdaysWake  string               `json:"weekdaysWake,omitempty" example:"lunes"`    // Frontend format: specific days for wake (mapped to wakeDays)
 	Namespaces    []string             `json:"namespaces,omitempty" example:"apps"`       // Optional: limit to specific namespaces
 	ScheduleName  string               `json:"scheduleName,omitempty" example:"bdaqa"`    // Optional: target specific schedule name
 	Apply         bool                 `json:"apply,omitempty"`                           // Always applies to cluster (field is ignored)
@@ -1460,15 +1460,15 @@ type DelayConfig struct {
 
 // NamespaceScheduleRequest represents a request to create/update a schedule for a specific namespace
 type NamespaceScheduleRequest struct {
-	Tenant        string               `json:"tenant" binding:"required"`
-	Namespace     string               `json:"namespace" binding:"required"`
-	Off           string               `json:"off" binding:"required"`
-	On            string               `json:"on" binding:"required"`
-	Weekdays      string               `json:"weekdays,omitempty"`
-	WeekdaysSleep string               `json:"weekdaysSleep,omitempty"`
-	WeekdaysWake  string               `json:"weekdaysWake,omitempty"`
-	ScheduleName  string               `json:"scheduleName,omitempty"`
-	Description   string               `json:"description,omitempty"`
+	Tenant                      string               `json:"tenant" binding:"required"`
+	Namespace                   string               `json:"namespace" binding:"required"`
+	Off                         string               `json:"off" binding:"required"`
+	On                          string               `json:"on" binding:"required"`
+	Weekdays                    string               `json:"weekdays,omitempty"`
+	WeekdaysSleep               string               `json:"weekdaysSleep,omitempty"`
+	WeekdaysWake                string               `json:"weekdaysWake,omitempty"`
+	ScheduleName                string               `json:"scheduleName,omitempty"`
+	Description                 string               `json:"description,omitempty"`
 	Delays                      *DelayConfig         `json:"delays,omitempty"`
 	Exclusions                  []NamespaceExclusion `json:"exclusions,omitempty"`
 	IgnoreExternalModifications bool                 `json:"ignoreExternalModifications,omitempty"` // Ignored: always set to true in service layer
