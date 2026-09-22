@@ -46,6 +46,7 @@ export interface CreateScheduleRequest {
   namespaces: string[]
   delays?: DelayConfig
   exclusions?: Exclusion[]
+  ignoreExternalModifications?: boolean
 }
 
 export interface DelayConfig {
@@ -107,6 +108,7 @@ export interface NamespaceScheduleRequest {
   weekdaysWake: string
   delays?: WakeDelayConfig
   exclusions?: Exclusion[]
+  ignoreExternalModifications?: boolean
 }
 
 export interface SleepInfoDetail {

@@ -287,7 +287,9 @@ type CreateScheduleRequest struct {
 	Delays        *DelayConfig `json:"delays,omitempty"`                                                   // Optional: custom delays for staggered wake-up (e.g., {"pgHdfsDelay": "0m", "pgbouncerDelay": "5m", "deploymentsDelay": "7m"})
 	ScheduleName  string       `json:"scheduleName,omitempty" example:"horario-laboral"`                   // Optional: name to identify this schedule (allows multiple schedules per namespace)
 	Description   string       `json:"description,omitempty" example:"Horario laboral de lunes a viernes"` // Optional: description of the schedule
-	Apply         bool         `json:"apply,omitempty"`                                                    // Always applies to cluster (field is ignored but kept for compatibility)
+	Apply                       bool                 `json:"apply,omitempty"`                                                    // Always applies to cluster (field is ignored but kept for compatibility)
+	IgnoreExternalModifications bool                 `json:"ignoreExternalModifications,omitempty"`                              // Ignored: always set to true in service layer
+	Exclusions                  []NamespaceExclusion `json:"exclusions,omitempty"`                                               // Optional: user-defined label exclusions per namespace
 }
 
 // handleCreateSchedule creates a new schedule
@@ -403,8 +405,10 @@ type UpdateScheduleRequest struct {
 	WakeDays      string   `json:"wakeDays,omitempty" example:"lunes"`        // Optional: specific days for wake (overrides weekdays)
 	WeekdaysSleep string   `json:"weekdaysSleep,omitempty" example:"viernes"` // Frontend format: specific days for sleep (mapped to sleepDays)
 	WeekdaysWake  string   `json:"weekdaysWake,omitempty" example:"lunes"`    // Frontend format: specific days for wake (mapped to wakeDays)
-	Namespaces    []string `json:"namespaces,omitempty" example:"apps"`       // Optional: limit to specific namespaces
-	Apply         bool     `json:"apply,omitempty"`                           // Always applies to cluster (field is ignored)
+	Namespaces    []string             `json:"namespaces,omitempty" example:"apps"`       // Optional: limit to specific namespaces
+	ScheduleName  string               `json:"scheduleName,omitempty" example:"bdaqa"`    // Optional: target specific schedule name
+	Apply         bool                 `json:"apply,omitempty"`                           // Always applies to cluster (field is ignored)
+	Exclusions    []NamespaceExclusion `json:"exclusions,omitempty"`                      // Optional: user-defined label exclusions per namespace
 }
 
 // ManualScheduleRequest represents a manual sleep/wake action for a schedule
@@ -493,13 +497,15 @@ func (s *Server) handleUpdateSchedule(c *gin.Context) {
 
 	// Convert UpdateScheduleRequest to CreateScheduleRequest
 	createReq := CreateScheduleRequest{
-		Tenant:     tenant,
-		Off:        req.Off,
-		On:         req.On,
-		Weekdays:   req.Weekdays,
-		SleepDays:  sleepDays,
-		WakeDays:   wakeDays,
-		Namespaces: req.Namespaces,
+		Tenant:       tenant,
+		Off:          req.Off,
+		On:           req.On,
+		Weekdays:     req.Weekdays,
+		SleepDays:    sleepDays,
+		WakeDays:     wakeDays,
+		Namespaces:   req.Namespaces,
+		ScheduleName: req.ScheduleName,
+		Exclusions:   req.Exclusions,
 	}
 
 	// Verify schedule exists before updating
@@ -1463,8 +1469,9 @@ type NamespaceScheduleRequest struct {
 	WeekdaysWake  string               `json:"weekdaysWake,omitempty"`
 	ScheduleName  string               `json:"scheduleName,omitempty"`
 	Description   string               `json:"description,omitempty"`
-	Delays        *DelayConfig         `json:"delays,omitempty"`
-	Exclusions    []NamespaceExclusion `json:"exclusions,omitempty"`
+	Delays                      *DelayConfig         `json:"delays,omitempty"`
+	Exclusions                  []NamespaceExclusion `json:"exclusions,omitempty"`
+	IgnoreExternalModifications bool                 `json:"ignoreExternalModifications,omitempty"` // Ignored: always set to true in service layer
 }
 
 // NamespaceExclusion represents an exclusion for a specific namespace

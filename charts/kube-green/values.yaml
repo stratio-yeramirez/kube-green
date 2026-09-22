@@ -5,7 +5,7 @@ manager:
   image:
     repository: yeramirez/kube-green
     pullPolicy: IfNotPresent
-    tag: "0.7.20"
+    tag: "0.7.28"
 
   extraArgs: []
 
@@ -66,7 +66,13 @@ frontend:
   image:
     repository: yeramirez/kube-front
     pullPolicy: IfNotPresent
-    tag: "0.7.2-390565c"
+    tag: "0.7.12"
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    hosts: []
+    tls: []
   resources:
     limits:
       cpu: 100m
@@ -118,7 +124,7 @@ rbac:
     name: kube-green-manager-role-custom-aggregate
     rules: []
   extendedCRDs:
-    enabled: false
+    enabled: true
 
 crds:
   enabled: true

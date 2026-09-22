@@ -15,6 +15,7 @@ import {
   DialogContent,
   DialogContentText,
   DialogActions,
+  TextField,
   Table,
   TableBody,
   TableCell,
@@ -28,12 +29,15 @@ import {
   AccordionSummary,
   AccordionDetails,
   Tooltip,
+  Snackbar,
 } from '@mui/material'
 import {
   ArrowBack as ArrowBackIcon,
   ExpandMore as ExpandMoreIcon,
   PowerSettingsNew as PowerIcon,
   WbSunny as WakeIcon,
+  PauseCircleOutline as PauseIcon,
+  PlayCircleOutline as ResumeIcon,
 } from '@mui/icons-material'
 import { useSchedules, useDeleteSchedule, useSuspendedServices } from '../../hooks/useTenants'
 import { apiClient } from '../../services/api'
@@ -56,6 +60,9 @@ export default function TenantDetail() {
     namespace?: string
   } | null>(null)
   const [nsActionLoading, setNsActionLoading] = useState<string | null>(null)
+  const [nsSuspendDialog, setNsSuspendDialog] = useState<{ open: boolean; namespace: string }>({ open: false, namespace: '' })
+  const [nsSuspendUntil, setNsSuspendUntil] = useState('')
+  const [nsSnack, setNsSnack] = useState<{ open: boolean; message: string; severity: 'success' | 'error' }>({ open: false, message: '', severity: 'success' })
 
   // Set of namespaces that currently have at least one suspended service
   const suspendedNamespaces = useMemo(() => {
@@ -128,16 +135,25 @@ export default function TenantDetail() {
           schedule.excludeRef.forEach((excl: any) => {
             if (excl.matchLabels && typeof excl.matchLabels === 'object') {
               Object.entries(excl.matchLabels).forEach(([key, value]) => {
-                // Filtrar exclusiones del sistema (operadores)
-                const systemExclusions = new Set([
-                  'app.kubernetes.io/managed-by',
-                  'postgres.stratio.com/cluster',
-                  'app.kubernetes.io/part-of',
-                  'hdfs.stratio.com/cluster',
-                  'cct.stratio.com/application_id',
-                ])
+                // Filtrar exclusiones del sistema (operadores) — se muestran solo las del usuario
+                const systemExclusionPairs = [
+                  { key: 'app.kubernetes.io/managed-by', value: 'postgres-operator' },
+                  { key: 'postgres.stratio.com/cluster', value: 'true' },
+                  { key: 'app.kubernetes.io/part-of', value: 'postgres' },
+                  { key: 'app.kubernetes.io/managed-by', value: 'hdfs-operator' },
+                  { key: 'hdfs.stratio.com/cluster', value: 'true' },
+                  { key: 'app.kubernetes.io/part-of', value: 'hdfs' },
+                  { key: 'app.kubernetes.io/managed-by', value: 'opensearch-operator' },
+                  { key: 'opensearch.stratio.com/cluster', value: 'true' },
+                  { key: 'app.kubernetes.io/part-of', value: 'opensearch' },
+                  { key: 'app.kubernetes.io/managed-by', value: 'kafka-operator' },
+                  { key: 'kafka.stratio.com/cluster', value: 'true' },
+                  { key: 'app.kubernetes.io/part-of', value: 'kafka' },
+                  { key: 'cct.stratio.com/application_id', value: String(value) },
+                ]
+                const isSystemPair = systemExclusionPairs.some((p) => p.key === key && p.value === String(value))
 
-                if (!systemExclusions.has(key)) {
+                if (!isSystemPair) {
                   const exclusionKey = `${namespaceSuffix}:${key}:${value}`
                   if (!seenExclusions.has(exclusionKey)) {
                     seenExclusions.add(exclusionKey)
@@ -302,42 +318,92 @@ export default function TenantDetail() {
                   </Typography>
                   <Chip label={`${tenantName}-${namespace}`} size="small" variant="outlined" />
                 </Box>
-                <Box sx={{ display: 'flex', gap: 1 }}>
-                  {(() => {
-                    const nsKey = `${tenantName}-${namespace}`
-                    const isSleeping = suspendedNamespaces.has(nsKey) || suspendedNamespaces.has(namespace)
-                    const isLoading = nsActionLoading === namespace
-                    return (
-                      <Tooltip title={isSleeping ? 'Encender namespace' : 'Apagar namespace'}>
-                        <span>
-                          <Button
-                            variant="contained"
-                            size="small"
-                            color={isSleeping ? 'success' : 'warning'}
-                            startIcon={isLoading
-                              ? <CircularProgress size={14} color="inherit" />
-                              : isSleeping ? <WakeIcon /> : <PowerIcon />
-                            }
-                            disabled={isLoading}
-                            onClick={async () => {
-                              setNsActionLoading(namespace)
-                              try {
-                                await apiClient.triggerManualAction(
-                                  tenantName || '',
-                                  isSleeping ? 'wake' : 'sleep',
-                                  scheduleNameParam || undefined
-                                )
-                              } catch { /* ignore */ } finally {
-                                setNsActionLoading(null)
-                              }
-                            }}
-                          >
-                            {isSleeping ? 'Encender' : 'Apagar'}
-                          </Button>
-                        </span>
-                      </Tooltip>
-                    )
-                  })()}
+                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                  {/* Manual: Apagar ahora */}
+                  <Tooltip title="Apagar namespace ahora (acción manual inmediata)">
+                    <span>
+                      <Button
+                        variant="contained"
+                        size="small"
+                        color="warning"
+                        startIcon={nsActionLoading === `sleep-${namespace}` ? <CircularProgress size={14} color="inherit" /> : <PowerIcon />}
+                        disabled={nsActionLoading !== null}
+                        onClick={async () => {
+                          setNsActionLoading(`sleep-${namespace}`)
+                          try {
+                            await apiClient.triggerManualAction(tenantName || '', 'sleep', scheduleNameParam || undefined, namespace)
+                            setNsSnack({ open: true, message: `Namespace ${namespace} apagado`, severity: 'success' })
+                          } catch { setNsSnack({ open: true, message: 'Error al apagar', severity: 'error' }) }
+                          finally { setNsActionLoading(null) }
+                        }}
+                      >
+                        Apagar
+                      </Button>
+                    </span>
+                  </Tooltip>
+                  {/* Manual: Encender ahora */}
+                  <Tooltip title="Encender namespace ahora (acción manual inmediata)">
+                    <span>
+                      <Button
+                        variant="contained"
+                        size="small"
+                        color="success"
+                        startIcon={nsActionLoading === `wake-${namespace}` ? <CircularProgress size={14} color="inherit" /> : <WakeIcon />}
+                        disabled={nsActionLoading !== null}
+                        onClick={async () => {
+                          setNsActionLoading(`wake-${namespace}`)
+                          try {
+                            await apiClient.triggerManualAction(tenantName || '', 'wake', scheduleNameParam || undefined, namespace)
+                            setNsSnack({ open: true, message: `Namespace ${namespace} encendido`, severity: 'success' })
+                          } catch { setNsSnack({ open: true, message: 'Error al encender', severity: 'error' }) }
+                          finally { setNsActionLoading(null) }
+                        }}
+                      >
+                        Encender
+                      </Button>
+                    </span>
+                  </Tooltip>
+                  {/* Suspender cron */}
+                  <Tooltip title="Pausar el cron schedule — el apagado/encendido automático no se ejecutará hasta la fecha indicada">
+                    <span>
+                      <Button
+                        variant="outlined"
+                        size="small"
+                        color="secondary"
+                        startIcon={<PauseIcon />}
+                        disabled={nsActionLoading !== null}
+                        onClick={() => {
+                          const next1h = new Date(Date.now() + 60 * 60 * 1000)
+                          setNsSuspendUntil(next1h.toISOString().slice(0, 16))
+                          setNsSuspendDialog({ open: true, namespace })
+                        }}
+                      >
+                        Suspender cron
+                      </Button>
+                    </span>
+                  </Tooltip>
+                  {/* Reactivar cron */}
+                  <Tooltip title="Reactivar el cron schedule — el apagado/encendido automático vuelve a funcionar normalmente">
+                    <span>
+                      <Button
+                        variant="outlined"
+                        size="small"
+                        color="info"
+                        startIcon={nsActionLoading === `resume-${namespace}` ? <CircularProgress size={14} color="inherit" /> : <ResumeIcon />}
+                        disabled={nsActionLoading !== null}
+                        onClick={async () => {
+                          setNsActionLoading(`resume-${namespace}`)
+                          try {
+                            await apiClient.unsuspendSchedule(tenantName || '', scheduleNameParam || undefined, namespace)
+                            setNsSnack({ open: true, message: `Cron del namespace ${namespace} reactivado`, severity: 'success' })
+                          } catch { setNsSnack({ open: true, message: 'Error al reactivar cron', severity: 'error' }) }
+                          finally { setNsActionLoading(null) }
+                        }}
+                      >
+                        Reactivar cron
+                      </Button>
+                    </span>
+                  </Tooltip>
                   <Button
                     variant="outlined"
                     size="small"
@@ -604,6 +670,50 @@ export default function TenantDetail() {
           {scheduleNameParam ? 'Eliminar Todo el Tenant' : 'Eliminar'}
         </Button>
       </Box>
+
+      {/* Suspend namespace cron dialog */}
+      <Dialog open={nsSuspendDialog.open} onClose={() => setNsSuspendDialog(d => ({ ...d, open: false }))} maxWidth="xs" fullWidth>
+        <DialogTitle>Suspender cron — {nsSuspendDialog.namespace}</DialogTitle>
+        <DialogContent sx={{ pt: 2 }}>
+          <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
+            El apagado/encendido automático quedará pausado hasta la fecha indicada. Los recursos no cambiarán de estado.
+          </Typography>
+          <TextField
+            label="Suspender hasta"
+            type="datetime-local"
+            value={nsSuspendUntil}
+            onChange={e => setNsSuspendUntil(e.target.value)}
+            fullWidth
+            size="small"
+            InputLabelProps={{ shrink: true }}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setNsSuspendDialog(d => ({ ...d, open: false }))}>Cancelar</Button>
+          <Button
+            variant="contained"
+            color="secondary"
+            disabled={!nsSuspendUntil || nsActionLoading !== null}
+            startIcon={nsActionLoading === `suspend-${nsSuspendDialog.namespace}` ? <CircularProgress size={14} color="inherit" /> : <PauseIcon />}
+            onClick={async () => {
+              const ns = nsSuspendDialog.namespace
+              setNsSuspendDialog(d => ({ ...d, open: false }))
+              setNsActionLoading(`suspend-${ns}`)
+              try {
+                await apiClient.suspendSchedule(tenantName || '', new Date(nsSuspendUntil), scheduleNameParam || undefined, ns)
+                setNsSnack({ open: true, message: `Cron de ${ns} suspendido hasta ${new Date(nsSuspendUntil).toLocaleString('es-ES')}`, severity: 'success' })
+              } catch { setNsSnack({ open: true, message: 'Error al suspender cron', severity: 'error' }) }
+              finally { setNsActionLoading(null) }
+            }}
+          >
+            Confirmar suspensión
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Snackbar open={nsSnack.open} autoHideDuration={4000} onClose={() => setNsSnack(s => ({ ...s, open: false }))}>
+        <Alert severity={nsSnack.severity} onClose={() => setNsSnack(s => ({ ...s, open: false }))}>{nsSnack.message}</Alert>
+      </Snackbar>
 
       <Dialog
         open={deleteDialogOpen}

@@ -248,9 +248,33 @@ class ApiClient {
     await this.client.put('/ui-config', config)
   }
 
-  // Trigger manual sleep or wake for a tenant
-  async triggerManualAction(tenant: string, action: 'sleep' | 'wake', scheduleName?: string): Promise<void> {
-    await this.client.post<ApiResponse<void>>(`/schedules/${tenant}/manual`, { action, scheduleName })
+  // Trigger manual sleep or wake for a tenant (or a specific namespace within it)
+  async triggerManualAction(tenant: string, action: 'sleep' | 'wake', scheduleName?: string, namespace?: string): Promise<void> {
+    await this.client.post<ApiResponse<void>>(`/schedules/${tenant}/manual`, {
+      action,
+      ...(scheduleName && { scheduleName }),
+      ...(namespace && { namespace }),
+    })
+  }
+
+  // Suspend cron schedule until a future date (pauses automatic sleep/wake triggers)
+  async suspendSchedule(tenant: string, until: Date, scheduleName?: string, namespace?: string): Promise<void> {
+    await this.client.post<ApiResponse<void>>(`/schedules/${tenant}/suspend`, {
+      until: until.toISOString(),
+      ...(scheduleName && { scheduleName }),
+      ...(namespace && { namespace }),
+    })
+  }
+
+  // Remove schedule suspension (resumes normal cron execution)
+  async unsuspendSchedule(tenant: string, scheduleName?: string, namespace?: string): Promise<void> {
+    const params = new URLSearchParams()
+    if (scheduleName) params.set('scheduleName', scheduleName)
+    if (namespace) params.set('namespace', namespace)
+    const query = params.toString()
+    await this.client.delete<ApiResponse<void>>(
+      query ? `/schedules/${tenant}/suspend?${query}` : `/schedules/${tenant}/suspend`
+    )
   }
 
   // Convert timezone

@@ -18,21 +18,22 @@ const queryClient = new QueryClient({
   },
 })
 
-// Stratio Bigdata Corporate Theme
+// kube-green Dark Theme
 const theme = createTheme({
   palette: {
+    mode: 'dark',
     primary: {
-      main: '#1e3c72',
-      light: '#2a5298',
-      dark: '#0f2140',
+      main: '#22c55e',
+      light: '#4ade80',
+      dark: '#16a34a',
     },
     secondary: {
-      main: '#0ea5e9',
-      light: '#38bdf8',
-      dark: '#0284c7',
+      main: '#818cf8',
+      light: '#a5b4fc',
+      dark: '#6366f1',
     },
     success: {
-      main: '#10b981',
+      main: '#22c55e',
     },
     warning: {
       main: '#f59e0b',
@@ -40,10 +41,14 @@ const theme = createTheme({
     error: {
       main: '#ef4444',
     },
-    background: {
-      default: '#f8fafc',
-      paper: '#ffffff',
+    info: {
+      main: '#38bdf8',
     },
+    background: {
+      default: '#0d1117',
+      paper: '#161b27',
+    },
+    divider: 'rgba(255,255,255,0.08)',
   },
   typography: {
     fontFamily: [
@@ -57,7 +62,32 @@ const theme = createTheme({
     ].join(','),
   },
   shape: {
-    borderRadius: 8,
+    borderRadius: 10,
+  },
+  components: {
+    MuiCard: {
+      styleOverrides: {
+        root: {
+          backgroundImage: 'none',
+          border: '1px solid rgba(255,255,255,0.07)',
+        },
+      },
+    },
+    MuiButton: {
+      styleOverrides: {
+        root: {
+          textTransform: 'none',
+          fontWeight: 500,
+        },
+      },
+    },
+    MuiChip: {
+      styleOverrides: {
+        root: {
+          fontWeight: 500,
+        },
+      },
+    },
   },
 })
 

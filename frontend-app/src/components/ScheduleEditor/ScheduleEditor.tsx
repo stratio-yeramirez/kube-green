@@ -53,6 +53,25 @@ const TIMEZONES = [
   { value: 'America/Sao_Paulo', label: 'America/Sao_Paulo (Brasil)' },
 ]
 
+// Operator-managed exclusions injected automatically by the backend — must not be shown/edited by users
+const SYSTEM_EXCLUSION_PAIRS: Array<{ key: string; value: string }> = [
+  { key: 'app.kubernetes.io/managed-by', value: 'postgres-operator' },
+  { key: 'postgres.stratio.com/cluster', value: 'true' },
+  { key: 'app.kubernetes.io/part-of', value: 'postgres' },
+  { key: 'app.kubernetes.io/managed-by', value: 'hdfs-operator' },
+  { key: 'hdfs.stratio.com/cluster', value: 'true' },
+  { key: 'app.kubernetes.io/part-of', value: 'hdfs' },
+  { key: 'app.kubernetes.io/managed-by', value: 'opensearch-operator' },
+  { key: 'opensearch.stratio.com/cluster', value: 'true' },
+  { key: 'app.kubernetes.io/part-of', value: 'opensearch' },
+  { key: 'app.kubernetes.io/managed-by', value: 'kafka-operator' },
+  { key: 'kafka.stratio.com/cluster', value: 'true' },
+  { key: 'app.kubernetes.io/part-of', value: 'kafka' },
+]
+
+const isSystemExclusion = (key: string, value: string): boolean =>
+  SYSTEM_EXCLUSION_PAIRS.some((p) => p.key === key && p.value === value)
+
 export default function ScheduleEditor() {
   const { tenantName } = useParams<{ tenantName?: string }>()
   const [searchParams] = useSearchParams()
@@ -63,7 +82,7 @@ export default function ScheduleEditor() {
   const navigate = useNavigate()
   const [formData, setFormData] = useState<CreateScheduleRequest>({
     tenant: tenantName || '',
-    scheduleName: '',
+    scheduleName: scheduleNameParam,
     description: '',
     userTimezone: 'America/Bogota',
     clusterTimezone: 'UTC',
@@ -80,6 +99,7 @@ export default function ScheduleEditor() {
       suspendStatefulSetsPostgres: '0m',
       suspendStatefulSetsHdfs: '0m',
     },
+    ignoreExternalModifications: true,
   })
   const { data: tenantsData, isLoading: tenantsLoading, refetch: refetchTenants } = useTenants()
   const tenantForValidation = tenantName || formData.tenant
@@ -144,29 +164,12 @@ export default function ScheduleEditor() {
   
   // Función helper para actualizar exclusiones y mantener sincronizadas ambas listas
   const updateExclusions = (newExclusions: Array<{ namespace: string; labelKey: string; labelValue: string; selectedService?: string }>) => {
-    // Actualizar todas las exclusiones cargadas
     setAllExclusionsLoaded((prevAll) => {
-      // Crear un mapa para tracking rápido
-      const newMap = new Map<string, { namespace: string; labelKey: string; labelValue: string; selectedService?: string }>()
-      
-      // Primero agregar todas las exclusiones existentes que NO están en los namespaces seleccionados
-      prevAll.forEach(excl => {
-        if (!formData.namespaces.includes(excl.namespace)) {
-          const key = `${excl.namespace}:${excl.labelKey}:${excl.labelValue}`
-          newMap.set(key, excl)
-        }
-      })
-      
-      // Luego agregar/actualizar las exclusiones de los namespaces seleccionados
-      newExclusions.forEach(excl => {
-        const key = `${excl.namespace}:${excl.labelKey}:${excl.labelValue}`
-        newMap.set(key, excl)
-      })
-      
-      return Array.from(newMap.values())
+      // Keep exclusions from namespaces NOT currently selected (they aren't being edited)
+      const preserved = prevAll.filter(excl => !formData.namespaces.includes(excl.namespace))
+      // Replace the selected-namespace exclusions with the new list (avoids key-collision on empty entries)
+      return [...preserved, ...newExclusions]
     })
-    
-    // Actualizar exclusiones filtradas (solo las de namespaces seleccionados)
     setExclusions(newExclusions)
   }
   
@@ -672,14 +675,15 @@ export default function ScheduleEditor() {
               schedule.excludeRef.forEach((excl: any) => {
                 if (excl.matchLabels && typeof excl.matchLabels === 'object') {
                   Object.entries(excl.matchLabels).forEach(([key, value]) => {
-                    // Crear una clave única para evitar duplicados
+                    // Skip system/operator exclusions — managed automatically by the backend
+                    if (isSystemExclusion(key, String(value))) return
                     const exclusionKey = `${namespaceSuffix}:${key}:${value}`
                     if (!extractedExclusions.has(exclusionKey)) {
                       extractedExclusions.set(exclusionKey, {
                         namespace: namespaceSuffix,
                         labelKey: key,
                         labelValue: String(value),
-                        selectedService: '', // Se identificará después al cargar servicios
+                        selectedService: '',
                       })
                     }
                   })
@@ -928,7 +932,7 @@ export default function ScheduleEditor() {
     const startMinutes = timeToMinutes(startTime)
     const endMinutes = timeToMinutes(endTime)
     return weekdays.map((day) => {
-      const crossesMidnight = endMinutes <= startMinutes
+      const crossesMidnight = endMinutes < startMinutes
       return {
         startDay: day,
         startMinutes,
@@ -1072,6 +1076,7 @@ export default function ScheduleEditor() {
         // IMPORTANTE: Incluir scheduleName y description explícitamente para que no se pierdan al actualizar
         scheduleName: scheduleNameToSend,
         description: descriptionToSend,
+        ignoreExternalModifications: true,
       }
 
       const currentScheduleName =
@@ -1217,6 +1222,7 @@ export default function ScheduleEditor() {
           weekdaysSleep: requestData.weekdaysSleep,
           weekdaysWake: requestData.weekdaysWake,
           exclusions: requestData.exclusions,
+          ignoreExternalModifications: true,
         }
 
         if (namespaceSchedule) {
@@ -1777,7 +1783,7 @@ export default function ScheduleEditor() {
                   }
                   
                   return (
-                    <Card key={index} sx={{ mb: 2, p: 2, bgcolor: 'grey.50' }}>
+                    <Card key={index} sx={{ mb: 2, p: 2, bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}>
                       <Grid container spacing={2} alignItems="flex-start">
                         <Grid item xs={12} md={3}>
                           <FormControl fullWidth>

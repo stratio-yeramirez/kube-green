@@ -182,6 +182,17 @@ spec:
                   It is not required, default to UTC.
                   For example, for the Italy time zone set Europe/Rome.
                 type: string
+              suspendScheduleUntil:
+                description: Temporarily suspends the cron schedule until the given
+                  time. While suspended, neither sleep nor wake triggers execute. Manual
+                  actions still override the suspension.
+                format: date-time
+                type: string
+              ignoreExternalModifications:
+                description: If true, wake up resources even if their generation changed
+                  while sleeping (e.g. modified by an external controller like CCT).
+                  By default (false) resources with a generation mismatch are skipped on wake.
+                type: boolean
               wakeUpAt:
                 description: |-
                   Hours:Minutes

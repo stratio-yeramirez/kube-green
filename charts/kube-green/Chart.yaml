@@ -5,6 +5,5 @@ icon: https://raw.githubusercontent.com/kube-green/kube-green/main/logo/logo.svg
 
 type: application
 
-# Aligned to what's deployed in keos-kubegreen (helm.sh/chart: kube-green-0.7.19)
-version: 0.7.19
-appVersion: "0.7.19"
+version: 0.7.28
+appVersion: "0.7.28"

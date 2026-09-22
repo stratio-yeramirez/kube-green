@@ -130,6 +130,12 @@ type SleepInfoSpec struct {
 	// +optional
 	// +operator-sdk:csv:customresourcedefinitions:type=spec
 	SuspendScheduleUntil *metav1.Time `json:"suspendScheduleUntil,omitempty"`
+	// If IgnoreExternalModifications is set to true, kube-green will wake up resources even if their
+	// generation changed while sleeping (e.g. modified by an external controller like CCT).
+	// By default (false) resources with a generation mismatch are skipped on wake.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
+	IgnoreExternalModifications *bool `json:"ignoreExternalModifications,omitempty"`
 }
 
 type Patch struct {
@@ -289,6 +295,13 @@ func (s SleepInfo) IsKafkaToSuspend() bool {
 		return false
 	}
 	return *s.Spec.SuspendStatefulSetsKafka
+}
+
+func (s SleepInfo) IsIgnoreExternalModifications() bool {
+	if s.Spec.IgnoreExternalModifications == nil {
+		return false
+	}
+	return *s.Spec.IgnoreExternalModifications
 }
 
 // IsSuspendedUntil returns true if the schedule is temporarily suspended at the given time.

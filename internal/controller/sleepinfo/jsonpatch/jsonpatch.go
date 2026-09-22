@@ -58,7 +58,7 @@ func NewResources(ctx context.Context, res resource.ResourceClient, namespace st
 			resourceGenerations = SleptResourceGenerations{}
 		}
 
-		generic := newGenericResource(res, patchData, restorePatch, resourceGenerations)
+		generic := newGenericResource(res, patchData, restorePatch, resourceGenerations, res.SleepInfo.IsIgnoreExternalModifications())
 
 		var err error
 		generic.data, err = generic.getListByNamespace(ctx, namespace, patchData.Target)
@@ -384,13 +384,22 @@ func (g managedResources) WakeUp(ctx context.Context) error {
 				continue
 			}
 			if expectedGeneration, ok := resourceWrapper.sleptGenerations[resource.GetName()]; ok && expectedGeneration > 0 && resource.GetGeneration() != expectedGeneration {
-				g.logger.Info("resource modified after sleep and before wake up, skip wake up",
-					"resourceName", resource.GetName(),
-					"resourceKind", resource.GetKind(),
-					"expectedGeneration", expectedGeneration,
-					"currentGeneration", resource.GetGeneration(),
-				)
-				continue
+				if resourceWrapper.ignoreExternalModifications {
+					g.logger.Info("resource modified after sleep and before wake up, waking up anyway (ignoreExternalModifications=true)",
+						"resourceName", resource.GetName(),
+						"resourceKind", resource.GetKind(),
+						"expectedGeneration", expectedGeneration,
+						"currentGeneration", resource.GetGeneration(),
+					)
+				} else {
+					g.logger.Info("resource modified after sleep and before wake up, skip wake up",
+						"resourceName", resource.GetName(),
+						"resourceKind", resource.GetKind(),
+						"expectedGeneration", expectedGeneration,
+						"currentGeneration", resource.GetGeneration(),
+					)
+					continue
+				}
 			}
 
 			// Comportamiento original: usar restore patch si está disponible (solo para recursos nativos y PgBouncer)

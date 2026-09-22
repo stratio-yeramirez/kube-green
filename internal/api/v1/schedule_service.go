@@ -218,6 +218,17 @@ func (s *ScheduleService) createSchedule(ctx context.Context, req CreateSchedule
 			})
 		}
 
+		// Add user-defined exclusions for this specific namespace
+		for _, userExcl := range req.Exclusions {
+			if userExcl.Namespace == namespace || userExcl.Namespace == suffix {
+				if len(userExcl.Filter.MatchLabels) > 0 {
+					excludeRefs = append(excludeRefs, kubegreenv1alpha1.FilterRef{
+						MatchLabels: userExcl.Filter.MatchLabels,
+					})
+				}
+			}
+		}
+
 		// Calculate wake times - apply delays if provided, otherwise use defaults for CRDs
 		onPgHDFSFinal := onPgHDFS
 		onPgBouncerFinal := onPgBouncer
@@ -952,6 +963,39 @@ func getExcludeRefsForOperators() []kubegreenv1alpha1.FilterRef {
 	}
 }
 
+// isSystemExclusion reports whether a FilterRef is an operator-managed exclusion that should
+// be invisible to the frontend. These are injected automatically by the backend and must never
+// be shown or edited by users.
+func isSystemExclusion(ref kubegreenv1alpha1.FilterRef) bool {
+	if len(ref.MatchLabels) != 1 {
+		return false
+	}
+	systemValues := map[string]map[string]bool{
+		"app.kubernetes.io/managed-by": {
+			"postgres-operator":   true,
+			"hdfs-operator":       true,
+			"opensearch-operator": true,
+			"kafka-operator":      true,
+		},
+		"postgres.stratio.com/cluster":   {"true": true},
+		"hdfs.stratio.com/cluster":       {"true": true},
+		"opensearch.stratio.com/cluster": {"true": true},
+		"kafka.stratio.com/cluster":      {"true": true},
+		"app.kubernetes.io/part-of": {
+			"postgres":   true,
+			"hdfs":       true,
+			"opensearch": true,
+			"kafka":      true,
+		},
+	}
+	for k, v := range ref.MatchLabels {
+		if vals, ok := systemValues[k]; ok {
+			return vals[v]
+		}
+	}
+	return false
+}
+
 // validateScheduleNameUniqueness checks if a schedule name is unique within a namespace
 func (s *ScheduleService) validateScheduleNameUniqueness(ctx context.Context, namespace, scheduleName string) error {
 	if scheduleName == "" {
@@ -967,6 +1011,10 @@ func (s *ScheduleService) validateScheduleNameUniqueness(ctx context.Context, na
 
 	// Check if any SleepInfo has the same schedule name in annotations
 	for _, si := range sleepInfoList.Items {
+		// Skip SleepInfos being deleted (finalizer not yet processed)
+		if si.DeletionTimestamp != nil {
+			continue
+		}
 		if existingName, ok := si.Annotations["kube-green.stratio.com/schedule-name"]; ok && existingName == scheduleName {
 			return fmt.Errorf("schedule name '%s' already exists in namespace '%s'", scheduleName, namespace)
 		}
@@ -977,6 +1025,10 @@ func (s *ScheduleService) validateScheduleNameUniqueness(ctx context.Context, na
 
 // createOrUpdateSleepInfo creates or updates a SleepInfo and its associated secret
 func (s *ScheduleService) createOrUpdateSleepInfo(ctx context.Context, sleepInfo *kubegreenv1alpha1.SleepInfo, userTimezone string) error {
+	// Always set ignoreExternalModifications so CCT-managed resources wake up correctly
+	trueVal := true
+	sleepInfo.Spec.IgnoreExternalModifications = &trueVal
+
 	var existing kubegreenv1alpha1.SleepInfo
 	err := s.reader.Get(ctx, client.ObjectKeyFromObject(sleepInfo), &existing)
 	if err != nil {
@@ -1345,6 +1397,10 @@ func (s *ScheduleService) GetSchedule(ctx context.Context, tenant string, namesp
 	// Filter by tenant and group by namespace suffix
 	namespaceGroups := make(map[string][]kubegreenv1alpha1.SleepInfo)
 	for _, si := range sleepInfoList.Items {
+		// Skip SleepInfos being deleted (finalizer not yet processed)
+		if si.DeletionTimestamp != nil {
+			continue
+		}
 		// Extract tenant from namespace
 		nsParts := strings.Split(si.Namespace, "-")
 		if len(nsParts) < 2 {
@@ -1516,13 +1572,11 @@ func (s *ScheduleService) buildSleepInfoSummary(ctx context.Context, si kubegree
 	// Build operation description
 	operation = buildOperationDescription(role, resources)
 
-	// Convert ExcludeRef to FilterRef format for API response
+	// Convert ExcludeRef to FilterRef format for API response — system exclusions are hidden
 	excludeRefs := make([]FilterRef, 0)
-	// IMPORTANTE: Verificar si ExcludeRef está presente y copiar correctamente
 	if si.Spec.ExcludeRef != nil && len(si.Spec.ExcludeRef) > 0 {
 		for _, excl := range si.Spec.ExcludeRef {
-			// Asegurarse de que MatchLabels no es nil
-			if excl.MatchLabels != nil && len(excl.MatchLabels) > 0 {
+			if excl.MatchLabels != nil && len(excl.MatchLabels) > 0 && !isSystemExclusion(excl) {
 				excludeRefs = append(excludeRefs, FilterRef{
 					MatchLabels: excl.MatchLabels,
 				})
@@ -2115,11 +2169,15 @@ func (s *ScheduleService) UpdateSchedule(ctx context.Context, tenant string, req
 	}
 
 	if !preserveExisting {
-		if err := s.DeleteSchedule(ctx, tenant, filterNamespace); err != nil {
-			// Si no se encuentran schedules, está bien - crearemos nuevos
-			if !strings.Contains(err.Error(), "not found") && !strings.Contains(err.Error(), "no schedules found") {
-				s.logger.Info("Failed to delete existing schedules before update (will continue)", "error", err, "tenant", tenant, "namespace", filterNamespace)
-				// Continuar de todas formas - CreateSchedule usará createOrUpdateSleepInfo que actualizará si existen
+		var deleteErr error
+		if req.ScheduleName != "" {
+			deleteErr = s.DeleteScheduleByName(ctx, tenant, req.ScheduleName, filterNamespace)
+		} else {
+			deleteErr = s.DeleteSchedule(ctx, tenant, filterNamespace)
+		}
+		if deleteErr != nil {
+			if !strings.Contains(deleteErr.Error(), "not found") && !strings.Contains(deleteErr.Error(), "no schedules found") {
+				s.logger.Info("Failed to delete existing schedules before update (will continue)", "error", deleteErr, "tenant", tenant, "namespace", filterNamespace)
 			}
 		}
 	}
@@ -3657,7 +3715,7 @@ func buildIntervals(weekdays []int, startTime, endTime string) []scheduleInterva
 	endMinutes := timeToMinutes(endTime)
 	intervals := make([]scheduleInterval, 0, len(weekdays))
 	for _, day := range weekdays {
-		crossesMidnight := endMinutes <= startMinutes
+		crossesMidnight := endMinutes < startMinutes
 		endDay := day
 		if crossesMidnight {
 			endDay = (day + 1) % 7
