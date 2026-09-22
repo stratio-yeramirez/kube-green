@@ -75,7 +75,7 @@ func TestListResources(t *testing.T) {
 			Client:    fakeClient,
 			Log:       testLogger,
 			SleepInfo: sleepInfo,
-		}, deployPatchData, RestorePatches{})
+		}, deployPatchData, RestorePatches{}, SleptResourceGenerations{}, false)
 		list, err := generic.getListByNamespace(context.Background(), namespace, unsupportedResourcePatchData.Target)
 		require.NoError(t, err)
 		require.Len(t, list, 0)
@@ -115,7 +115,7 @@ func TestListResources(t *testing.T) {
 			Client:    fakeClient,
 			Log:       testLogger,
 			SleepInfo: sleepInfo,
-		}, deployPatchData, RestorePatches{})
+		}, deployPatchData, RestorePatches{}, SleptResourceGenerations{}, false)
 		list, err := generic.getListByNamespace(context.Background(), namespace, deployPatchData.Target)
 		require.NoError(t, err)
 		require.Len(t, list, 2)
@@ -153,7 +153,7 @@ func TestListResources(t *testing.T) {
 			Client:    fakeClient,
 			Log:       testLogger,
 			SleepInfo: sleepInfo,
-		}, deployPatchData, RestorePatches{})
+		}, deployPatchData, RestorePatches{}, SleptResourceGenerations{}, false)
 		list, err := generic.getListByNamespace(context.Background(), namespace, deployPatchData.Target)
 		require.NoError(t, err)
 		require.Len(t, list, 2)
@@ -186,7 +186,7 @@ func TestListResources(t *testing.T) {
 			Client:    fakeClient,
 			Log:       testLogger,
 			SleepInfo: sleepInfo,
-		}, deployPatchData, RestorePatches{})
+		}, deployPatchData, RestorePatches{}, SleptResourceGenerations{}, false)
 		list, err := generic.getListByNamespace(context.Background(), namespace, deployPatchData.Target)
 		require.NoError(t, err)
 		require.Len(t, list, 1)
@@ -219,7 +219,7 @@ func TestListResources(t *testing.T) {
 			Client:    fakeClient,
 			Log:       testLogger,
 			SleepInfo: sleepInfo,
-		}, deployPatchData, RestorePatches{})
+		}, deployPatchData, RestorePatches{}, SleptResourceGenerations{}, false)
 		list, err := generic.getListByNamespace(context.Background(), namespace, deployPatchData.Target)
 		require.NoError(t, err)
 		require.Len(t, list, 1)
@@ -259,7 +259,7 @@ func TestListResources(t *testing.T) {
 			Client:    fakeClient,
 			Log:       testLogger,
 			SleepInfo: sleepInfo,
-		}, deployPatchData, RestorePatches{})
+		}, deployPatchData, RestorePatches{}, SleptResourceGenerations{}, false)
 		list, err := generic.getListByNamespace(context.Background(), namespace, deployPatchData.Target)
 		require.NoError(t, err)
 		require.Len(t, list, 1)

@@ -98,6 +98,7 @@ func TestSleepInfoControllerReconciliation(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, kubegreenv1alpha1.SleepInfoStatus{
 				LastScheduleTime: metav1.NewTime(parseTime(t, sleepScheduleTime).Local()),
+				OperationType:    sleepOperation,
 			}, sleepInfo.Status)
 
 			return withAssertOperation(ctx, AssertOperation{
@@ -123,6 +124,7 @@ func TestSleepInfoControllerReconciliation(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, kubegreenv1alpha1.SleepInfoStatus{
 				LastScheduleTime: metav1.NewTime(parseTime(t, lastSleepScheduleTime).Local()),
+				OperationType:    sleepOperation,
 			}, sleepInfo.Status)
 
 			secret, err := sleepInfoReconciler.getSecret(ctx, getSecretName(sleepInfoName), c.Namespace())
@@ -630,6 +632,18 @@ func TestSleepInfoControllerReconciliation(t *testing.T) {
 				secret, err := sleepInfoReconciler.getSecret(ctx, getSecretName(assert.originalResources.sleepInfo.GetName()), c.Namespace())
 				require.NoError(t, err)
 				secretData := secret.Data
+				// sleep-resource-generations recoge la generacion de cada recurso al dormirlo;
+				// depende del numero de reconciliaciones previas, por lo que se valida aparte.
+				generations := map[string]map[string]int64{}
+				require.NoError(t, json.Unmarshal(secretData[sleptGenerationsDataKey], &generations))
+				require.ElementsMatch(t, []string{"Deployment.apps", "StatefulSet.apps"}, func() []string {
+					targets := []string{}
+					for target := range generations {
+						targets = append(targets, target)
+					}
+					return targets
+				}())
+				delete(secretData, sleptGenerationsDataKey)
 				require.Equal(t, map[string][]byte{
 					lastScheduleKey:          []byte(parseTime(t, assert.expectedScheduleTime).Truncate(time.Second).Format(time.RFC3339)),
 					lastOperationKey:         []byte(sleepOperation),
@@ -670,10 +684,10 @@ func TestSleepInfoControllerReconciliation(t *testing.T) {
 				secret, err := sleepInfoReconciler.getSecret(ctx, getSecretName(assert.originalResources.sleepInfo.GetName()), c.Namespace())
 				require.NoError(t, err)
 				secretData := secret.Data
-				require.Equal(t, map[string][]byte{
-					lastScheduleKey:  []byte(parseTime(t, assert.expectedScheduleTime).Truncate(time.Second).Format(time.RFC3339)),
-					lastOperationKey: []byte(wakeUpOperation),
-				}, secretData)
+				// Tras el wake se conservan los datos de restore del sleep previo, de modo que
+				// solo se comprueban las claves propias de esta operacion.
+				require.Equal(t, []byte(parseTime(t, assert.expectedScheduleTime).Truncate(time.Second).Format(time.RFC3339)), secretData[lastScheduleKey])
+				require.Equal(t, []byte(wakeUpOperation), secretData[lastOperationKey])
 			})
 
 			return ctx
@@ -715,6 +729,18 @@ func TestSleepInfoControllerReconciliation(t *testing.T) {
 				secret, err := sleepInfoReconciler.getSecret(ctx, getSecretName(assert.originalResources.sleepInfo.GetName()), c.Namespace())
 				require.NoError(t, err)
 				secretData := secret.Data
+				// sleep-resource-generations recoge la generacion de cada recurso al dormirlo;
+				// depende del numero de reconciliaciones previas, por lo que se valida aparte.
+				generations := map[string]map[string]int64{}
+				require.NoError(t, json.Unmarshal(secretData[sleptGenerationsDataKey], &generations))
+				require.ElementsMatch(t, []string{"Deployment.apps", "StatefulSet.apps"}, func() []string {
+					targets := []string{}
+					for target := range generations {
+						targets = append(targets, target)
+					}
+					return targets
+				}())
+				delete(secretData, sleptGenerationsDataKey)
 				require.Equal(t, map[string][]byte{
 					lastScheduleKey:          []byte(parseTime(t, assert.expectedScheduleTime).Truncate(time.Second).Format(time.RFC3339)),
 					lastOperationKey:         []byte(sleepOperation),
@@ -1168,18 +1194,39 @@ func assertCorrectSleepOperation(t *testing.T, ctx context.Context, cfg *envconf
 			expectedSecretData[originalJSONPatchDataKey] = originalJSONPatchData
 		}
 
-		require.Equal(t, expectedSecretData, secretData)
+		// sleep-resource-generations guarda la generacion observada de cada recurso al
+		// dormirlo. El numero depende del entorno de test, asi que se comprueba que
+		// cubra los mismos targets que original-resource-info y se excluye del Equal.
+		actualSecretData := map[string][]byte{}
+		for k, v := range secretData {
+			if k != sleptGenerationsDataKey {
+				actualSecretData[k] = v
+			}
+		}
+		if len(originalJSONPatch) > 0 {
+			require.NotEmpty(t, secretData[sleptGenerationsDataKey])
+			generations := map[string]map[string]int64{}
+			require.NoError(t, json.Unmarshal(secretData[sleptGenerationsDataKey], &generations))
+			expectedTargets := []string{}
+			for target := range originalJSONPatch {
+				expectedTargets = append(expectedTargets, target)
+			}
+			actualTargets := []string{}
+			for target := range generations {
+				actualTargets = append(actualTargets, target)
+			}
+			require.ElementsMatch(t, expectedTargets, actualTargets)
+		}
+		require.Equal(t, expectedSecretData, actualSecretData)
 	})
 
 	t.Run("sleepinfo status updated correctly", func(t *testing.T) {
 		sleepInfo, err := sleepInfoReconciler.getSleepInfo(ctx, assert.req)
 		require.NoError(t, err)
 
+		// El status informa siempre la operacion ejecutada, incluso cuando no hay
+		// recursos que suspender en el namespace.
 		operationType := sleepOperation
-
-		if !sleepInfo.IsCronjobsToSuspend() && !sleepInfo.IsDeploymentsToSuspend() {
-			operationType = ""
-		}
 
 		require.Equal(t, kubegreenv1alpha1.SleepInfoStatus{
 			LastScheduleTime: metav1.NewTime(parseTime(t, assert.expectedScheduleTime).Local()),
@@ -1228,10 +1275,11 @@ func assertCorrectWakeUpOperation(t *testing.T, ctx context.Context, cfg *envcon
 		secret, err := sleepInfoReconciler.getSecret(ctx, getSecretName(assert.originalResources.sleepInfo.GetName()), cfg.Namespace())
 		require.NoError(t, err)
 		secretData := secret.Data
-		require.Equal(t, map[string][]byte{
-			lastScheduleKey:  []byte(parseTime(t, assert.expectedScheduleTime).Truncate(time.Second).Format(time.RFC3339)),
-			lastOperationKey: []byte(wakeUpOperation),
-		}, secretData)
+		// Tras el wake se conservan original-resource-info y sleep-resource-generations
+		// del sleep previo (ver "Preserve restore info on non-sleep operations" en
+		// secrets.go), por lo que solo se comprueban las claves de esta operacion.
+		require.Equal(t, []byte(parseTime(t, assert.expectedScheduleTime).Truncate(time.Second).Format(time.RFC3339)), secretData[lastScheduleKey])
+		require.Equal(t, []byte(wakeUpOperation), secretData[lastOperationKey])
 	})
 
 	t.Run("status correctly updated", func(t *testing.T) {
