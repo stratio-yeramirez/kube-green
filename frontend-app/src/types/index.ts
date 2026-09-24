@@ -44,11 +44,17 @@ export interface CreateScheduleRequest {
   weekdaysSleep: string // Días de la semana para apagar (ej: "0-6", "1,3,5", "6")
   weekdaysWake: string // Días de la semana para encender (ej: "0-6", "1,3,5", "6")
   namespaces: string[]
-  delays?: DelayConfig
+  // El backend agrupa el encendido en tres escalones (pgHdfsDelay, pgbouncerDelay y
+  // deploymentsDelay). Los delays del formulario se traducen con toApiDelays antes de
+  // enviarlos: si se mandan con otras claves, el backend los descarta en silencio y todos
+  // los SleepInfo del tenant acaban a la misma hora.
+  delays?: WakeDelayConfig
   exclusions?: Exclusion[]
   ignoreExternalModifications?: boolean
 }
 
+// DelayConfig son los delays tal como los edita el formulario: uno por tipo de recurso.
+// No es lo que viaja a la API; se traduce antes con toApiDelays.
 export interface DelayConfig {
   suspendDeployments?: string // e.g., "5m", "0m"
   suspendStatefulSets?: string
@@ -56,6 +62,12 @@ export interface DelayConfig {
   suspendDeploymentsPgbouncer?: string
   suspendStatefulSetsPostgres?: string
   suspendStatefulSetsHdfs?: string
+}
+
+// ScheduleFormData es el estado del editor de horarios. Coincide con la petición que se
+// envía salvo en los delays, que aquí se manejan con el detalle que ve el usuario.
+export type ScheduleFormData = Omit<CreateScheduleRequest, 'delays'> & {
+  delays?: DelayConfig
 }
 
 // WakeDelayConfig represents configurable delays for staggered wake-up (time AFTER base wake time)

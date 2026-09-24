@@ -37,8 +37,8 @@ import {
 } from '../../hooks/useTenants'
 import { useQueryClient } from '@tanstack/react-query'
 import { apiClient } from '../../services/api'
-import { convertTimezone, convertFromClusterToUser, getTimezoneDisplayName, convertWeekdaysFromClusterToUser, formatMinutesToDelay } from '../../utils/timezone'
-import type { CreateScheduleRequest } from '../../types'
+import { convertTimezone, convertFromClusterToUser, getTimezoneDisplayName, convertWeekdaysFromClusterToUser, formatMinutesToDelay, toApiDelays } from '../../utils/timezone'
+import type { CreateScheduleRequest, ScheduleFormData } from '../../types'
 import { WEEKDAY_NAMES } from '../../types'
 
 const TIMEZONES = [
@@ -80,7 +80,7 @@ export default function ScheduleEditor() {
   const isNamespaceEdit = !!namespaceParam
   const isEditMode = !!tenantName
   const navigate = useNavigate()
-  const [formData, setFormData] = useState<CreateScheduleRequest>({
+  const [formData, setFormData] = useState<ScheduleFormData>({
     tenant: tenantName || '',
     scheduleName: scheduleNameParam,
     description: '',
@@ -1066,6 +1066,9 @@ export default function ScheduleEditor() {
       const requestData: CreateScheduleRequest = {
         ...formData,
         namespaces: targetNamespaces,
+        // El formulario maneja un delay por tipo de recurso; la API espera los tres
+        // escalones pgHdfsDelay / pgbouncerDelay / deploymentsDelay.
+        delays: toApiDelays(formData.delays),
         weekdaysSleep: weekdaysToString(selectedSleepWeekdays),
         weekdaysWake: weekdaysToString(selectedWakeWeekdays),
         exclusions: exclusionsFormatted.length > 0 ? exclusionsFormatted : undefined,

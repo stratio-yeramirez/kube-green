@@ -53,6 +53,29 @@ func TestDelayConfigIgnoraClavesDesconocidas(t *testing.T) {
 	require.Empty(t, delays.PgHdfsDelay)
 }
 
+// TestDelayConfigHasValues cubre la comprobación que distingue una petición sin delays de
+// una que los trae. Es lo que decide si se heredan los del schedule ya configurado.
+func TestDelayConfigHasValues(t *testing.T) {
+	var nulo *DelayConfig
+	require.False(t, nulo.hasValues(), "una petición sin delays no debe considerarse configurada")
+	require.False(t, (&DelayConfig{}).hasValues(), "un objeto vacío llega así cuando el cliente usa otras claves")
+
+	require.True(t, (&DelayConfig{PgHdfsDelay: "0m"}).hasValues())
+	require.True(t, (&DelayConfig{PgbouncerDelay: "5m"}).hasValues())
+	require.True(t, (&DelayConfig{DeploymentsDelay: "10m"}).hasValues())
+}
+
+// TestDelayConfigHasValuesConClavesDelFrontendAntiguo comprueba el caso concreto que dejaba
+// tenants enteros encendiéndose a la vez: un payload con los nombres que usaba el formulario
+// llega vacío, y por tanto debe tratarse como "sin delays" para poder heredar los existentes.
+func TestDelayConfigHasValuesConClavesDelFrontendAntiguo(t *testing.T) {
+	var delays DelayConfig
+	require.NoError(t, json.Unmarshal(
+		[]byte(`{"suspendDeploymentsPgbouncer":"5m","suspendDeployments":"10m"}`), &delays))
+
+	require.False(t, delays.hasValues())
+}
+
 func TestParseDelayToMinutes(t *testing.T) {
 	casos := []struct {
 		nombre   string

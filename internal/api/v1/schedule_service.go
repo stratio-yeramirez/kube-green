@@ -1760,6 +1760,27 @@ func (s *ScheduleService) UpdateSchedule(ctx context.Context, tenant string, req
 		filterNamespace = namespaceSuffix[0]
 	}
 
+	// Preservar el encendido escalonado que ya tenga el tenant. Cuando la petición no trae
+	// delays utilizables, se derivan de los SleepInfo existentes; sin esto, una edición que
+	// no los incluya los regenera con los valores por defecto y deja todos los SleepInfo del
+	// tenant a la misma hora, con lo que las aplicaciones arrancan antes que sus bases de datos.
+	if !req.Delays.hasValues() {
+		if existing, err := s.GetSchedule(ctx, tenant, filterNamespace); err == nil && existing != nil {
+			targets := make([]string, 0, len(existing.Namespaces))
+			for suffix := range existing.Namespaces {
+				targets = append(targets, suffix)
+			}
+			if derived := s.extractDelaysFromSchedule(existing, targets); derived != nil {
+				req.Delays = derived
+				s.logger.Info("UpdateSchedule: delays derivados del schedule existente",
+					"tenant", tenant,
+					"pgHdfsDelay", derived.PgHdfsDelay,
+					"pgbouncerDelay", derived.PgbouncerDelay,
+					"deploymentsDelay", derived.DeploymentsDelay)
+			}
+		}
+	}
+
 	// IMPORTANTE: El frontend SIEMPRE debe enviar los tiempos cuando se actualiza
 	// Solo extraer valores del schedule existente si realmente están vacíos (no sobrescribir valores del frontend)
 	// Los tiempos del schedule existente están en UTC, necesitamos convertirlos a la timezone del usuario

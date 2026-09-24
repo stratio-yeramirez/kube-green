@@ -1,6 +1,6 @@
 import { format, parse } from 'date-fns'
 import { formatInTimeZone, utcToZonedTime, zonedTimeToUtc } from 'date-fns-tz'
-import type { TimezoneConversion } from '@/types'
+import type { DelayConfig, TimezoneConversion, WakeDelayConfig } from '@/types'
 
 /**
  * Converts a time string from user timezone to cluster timezone
@@ -341,6 +341,52 @@ export function formatMinutesToDelay(minutes: number): string {
   const hours = Math.floor(minutes / 60)
   const mins = minutes % 60
   return mins > 0 ? `${hours}h${mins}m` : `${hours}h`
+}
+
+/**
+ * Formats minutes to the delay format the API understands.
+ *
+ * The API parses a delay as a number followed by a single unit ("5m", "2h"), so a
+ * compound value like "1h30m" would be misread. Delays are always expressed in minutes.
+ */
+export function formatMinutesToApiDelay(minutes: number): string {
+  return `${Math.max(0, Math.round(minutes))}m`
+}
+
+/**
+ * Translates the delays handled by the form into the contract exposed by the API.
+ *
+ * The form offers one delay per resource type, while the API staggers the wake-up in
+ * three steps: PgCluster together with HDFSCluster, then PgBouncer, then the remaining
+ * deployments. When Postgres and HDFS carry different delays the larger one wins, so
+ * neither store is still starting when the next step begins. The fields with no
+ * counterpart in the API — native statefulsets and cronjobs — are not sent.
+ */
+export function toApiDelays(delays?: DelayConfig): WakeDelayConfig | undefined {
+  if (!delays) return undefined
+
+  const apiDelays: WakeDelayConfig = {}
+
+  const pgHdfsCandidates = [delays.suspendStatefulSetsPostgres, delays.suspendStatefulSetsHdfs]
+    .filter((value): value is string => Boolean(value))
+    .map(parseDelayToMinutes)
+  if (pgHdfsCandidates.length > 0) {
+    apiDelays.pgHdfsDelay = formatMinutesToApiDelay(Math.max(...pgHdfsCandidates))
+  }
+
+  if (delays.suspendDeploymentsPgbouncer) {
+    apiDelays.pgbouncerDelay = formatMinutesToApiDelay(
+      parseDelayToMinutes(delays.suspendDeploymentsPgbouncer)
+    )
+  }
+
+  if (delays.suspendDeployments) {
+    apiDelays.deploymentsDelay = formatMinutesToApiDelay(
+      parseDelayToMinutes(delays.suspendDeployments)
+    )
+  }
+
+  return Object.keys(apiDelays).length > 0 ? apiDelays : undefined
 }
 
 /**

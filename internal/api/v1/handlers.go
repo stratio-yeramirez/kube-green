@@ -1458,6 +1458,16 @@ type DelayConfig struct {
 	DeploymentsDelay string `json:"deploymentsDelay,omitempty"` // Delay for Deployments (e.g., "7m")
 }
 
+// hasValues indica si la configuración aporta algún delay. Un cliente que envíe el objeto
+// con otros nombres de campo se deserializa sin error y llega aquí vacío, de modo que esta
+// comprobación distingue "no me han pedido delays" de "me han pedido estos delays".
+func (d *DelayConfig) hasValues() bool {
+	if d == nil {
+		return false
+	}
+	return d.PgHdfsDelay != "" || d.PgbouncerDelay != "" || d.DeploymentsDelay != ""
+}
+
 // NamespaceScheduleRequest represents a request to create/update a schedule for a specific namespace
 type NamespaceScheduleRequest struct {
 	Tenant                      string               `json:"tenant" binding:"required"`
