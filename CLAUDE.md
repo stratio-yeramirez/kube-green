@@ -5,7 +5,11 @@ apagar y encender tenants completos de la plataforma Stratio en horario no labor
 soporte para CRDs de operadores (PgCluster, PgBouncer, HDFSCluster, OsCluster, OsDashboards,
 KafkaCluster), una API REST y un frontend React para gestionar horarios.
 
-Remoto: `https://github.com/stratio-yeramirez/kube-green.git` · Rama de trabajo: `main`
+Remoto: `https://github.com/stratio-yeramirez/kube-green.git`
+
+Se trabaja en `develop` con versiones prerelease y se fusiona en `main` cuando está validado.
+El flujo completo, con el procedimiento de despliegue, está en `RELEASE.md`. El trabajo
+pendiente, en `BACKLOG.md`.
 
 ## Estructura
 
@@ -16,7 +20,7 @@ Remoto: `https://github.com/stratio-yeramirez/kube-green.git` · Rama de trabajo
 | `internal/controller/sleepinfo/jsonpatch/` | Aplicación de patches a recursos genéricos y CRDs |
 | `internal/api/v1/` | API REST (handlers, schedule_service, auth) |
 | `frontend-app/` | Frontend React + TypeScript + MUI (versionado en este repo) |
-| `charts/kube-green/` | Chart Helm |
+| `charts/kube-green/` | Chart Helm, con `values-dev.yaml` y `values-test.yaml` por entorno |
 
 ## Dónde corre
 
@@ -48,9 +52,10 @@ kubectl get crd sleepinfos.kube-green.com --context $CTX -o json \
   | python3 -c "import json,sys;print(sorted(json.load(sys.stdin)['spec']['versions'][0]['schema']['openAPIV3Schema']['properties']['spec']['properties']))"
 ```
 
-El CRD por sí solo no prueba que el operador tenga la lógica: se aplica por un camino
-distinto al de la imagen. Para comprobar el binario de verdad, hay que extraerlo, porque
-la imagen es distroless y no tiene shell:
+**El CRD por sí solo no prueba que el operador tenga la lógica.** Ocurrió con
+`ignoreExternalModifications`: el campo está en el CRD y 150 SleepInfo de DEV lo usan, pero
+la imagen `0.7.28` no lo implementa. Para comprobar el binario hay que extraerlo, porque la
+imagen es distroless y no tiene shell:
 
 ```bash
 CID=$(docker create yeramirez/kube-green:<tag>)
@@ -61,21 +66,38 @@ strings /tmp/kube-green | grep -c "<literal de la funcionalidad>"
 
 ## Trampas conocidas
 
-**El release Helm no refleja lo desplegado.** El deployment declara
-`helm.sh/chart: kube-green-0.7.1` mientras corre una imagen muy posterior, porque la imagen
-se ha ido cambiando fuera de Helm. Un `helm upgrade` o `helm rollback` sobre ese release
-revertiría el operador a la imagen del chart 0.7.1. Actualizar con `kubectl set image`, o
-reconciliar antes el release con el chart del repo.
+**Los horarios se gestionan por la API, no con `kubectl`.** Al guardar un tenant desde la
+interfaz, la API regenera sus SleepInfo a partir de la hora base y los delays de la petición.
+Un `kubectl patch` sobre un SleepInfo sobrevive solo hasta que alguien edite ese tenant en la
+interfaz. Ocurrió con `bdadevrie` y `bdadevdat`, que perdieron su escalonado dos días después
+de aplicarlo a mano.
 
-**El CRD del cluster no procede de este chart.** Sus descripciones no coinciden con
-`charts/kube-green/templates/crds/sleepinfo.yaml` ni con `config/crd/bases/`. Los campos sí
-coinciden. Al añadir un campo nuevo al `SleepInfo` no basta con actualizar el chart: hay que
-asegurarse de que el CRD del cluster también lo incorpore, o el operador esperará un campo
-que la API rechaza.
+**El contrato de los delays es frágil.** El backend lee `pgHdfsDelay`, `pgbouncerDelay` y
+`deploymentsDelay`; el formulario maneja un campo por tipo de recurso y los traduce con
+`toApiDelays`. Un payload con otros nombres se deserializa sin error, llega vacío y, como el
+objeto sí existe, el backend tampoco aplica sus valores por defecto: todos los SleepInfo del
+tenant acaban a la misma hora. Los tests de `internal/api/v1/delays_test.go` fijan ese
+contrato; si se tocan los nombres de los campos, hay que tocar ambos lados.
+
+**El release Helm no refleja lo desplegado.** El deployment declara
+`helm.sh/chart: kube-green-0.7.1` mientras corre una imagen muy posterior, porque las
+imágenes se han cambiado históricamente con `kubectl set image`. Desplegar con Helm siguiendo
+`RELEASE.md` reconcilia esa diferencia, pero conviene comparar antes el render del chart con
+el deployment vivo.
+
+**Hay que pasar siempre los values del entorno.** El chart trae por defecto la identidad de
+DEV. Un upgrade de TEST sin `values-test.yaml` le deja la apariencia de DEV y vacía
+`CLUSTER_NAME`. Los secrets `kube-green-jwt` y `kube-green-users` sí los preserva el propio
+chart con `lookup`, de modo que un upgrade no invalida credenciales.
+
+**El CRD del cluster no procede de este chart.** Los campos coinciden, las descripciones no,
+y no se corresponden con ningún fichero del repositorio ni del contenedor del keos-installer;
+su origen no está identificado. Al añadir un campo al `SleepInfo` conviene verificar que el
+CRD del cluster lo incorpora, o el operador esperará un campo que la API rechaza.
 
 **Para consultar el cluster con permisos de administración** existe el contenedor local
 `keos-installer-pichincha-dev-2` (imagen `qa.int.stratio.com/stratio/keos-installer:1.2.10`),
-que apunta al mismo cluster:
+que apunta al mismo cluster y es desde donde se despliega con Helm:
 
 ```bash
 docker exec keos-installer-pichincha-dev-2 kubectl get crd sleepinfos.kube-green.com -o json
@@ -91,16 +113,17 @@ la edad de los pods.
 
 ## Build y despliegue
 
+El despliegue se hace con Helm desde el contenedor `keos-installer`, no con
+`kubectl set image`. Procedimiento completo, versiones y comprobaciones previas en
+`RELEASE.md`.
+
 ```bash
-# Operador
 make docker-build IMG=yeramirez/kube-green:<tag>
 make docker-push  IMG=yeramirez/kube-green:<tag>
-kubectl set image deployment/kube-green-controller-manager manager=yeramirez/kube-green:<tag> -n keos-core --context $CTX
-
-# Frontend
-cd frontend-app && docker build -t yeramirez/kube-front:<tag> .
-docker push yeramirez/kube-front:<tag>
-kubectl set image deployment/kube-green-frontend frontend=yeramirez/kube-front:<tag> -n keos-core --context $CTX
+helm package charts/kube-green -d dist/charts
+docker cp dist/charts/kube-green-<tag>.tgz keos-installer-pichincha-dev-2:/tmp/
+docker exec keos-installer-pichincha-dev-2 \
+  helm upgrade kube-green /tmp/kube-green-<tag>.tgz -n keos-core -f /tmp/values-test.yaml --wait
 ```
 
 Al publicar una imagen conviene etiquetar el commit correspondiente (`deployed/<version>`),
