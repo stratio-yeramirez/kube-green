@@ -12,3 +12,13 @@ manager:
     color: "#1e3c72"
     label: "Desarrollo"
     clusterName: "eks-dya-bda-stratio-dev"
+
+  # El deployment de DEV lleva este margen desde antes de gestionarse con Helm. Son los
+  # segundos que pueden pasar entre la hora programada y el procesamiento antes de que el
+  # operador se salte la ejecución; el valor por defecto del binario es 60. TEST no lo tiene.
+  extraArgs:
+    - --sleep-delta=300
+
+frontend:
+  # DEV tiene una sola réplica; el chart trae 2 por defecto.
+  replicas: 1
