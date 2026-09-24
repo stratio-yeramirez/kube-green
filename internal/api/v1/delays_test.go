@@ -214,6 +214,41 @@ func TestExtractDelaysFromScheduleSinDatastores(t *testing.T) {
 		"el escalonado solo se deriva del namespace datastores")
 }
 
+// TestScheduleResponseExponeLosDelays comprueba que la respuesta del GET informa el
+// escalonado configurado. Es lo que permite a la interfaz mostrar la configuración real del
+// cluster, incluida la aplicada directamente sobre el CRD, en lugar de recalcularla.
+func TestScheduleResponseExponeLosDelays(t *testing.T) {
+	respuesta := ScheduleResponse{
+		Tenant:     "bdadevrie",
+		Namespaces: map[string]NamespaceInfo{},
+		Delays: &DelayConfig{
+			PgHdfsDelay:      "0m",
+			PgbouncerDelay:   "5m",
+			DeploymentsDelay: "10m",
+		},
+	}
+
+	data, err := json.Marshal(respuesta)
+	require.NoError(t, err)
+
+	var decoded struct {
+		Delays *DelayConfig `json:"delays"`
+	}
+	require.NoError(t, json.Unmarshal(data, &decoded))
+	require.NotNil(t, decoded.Delays)
+	require.Equal(t, "5m", decoded.Delays.PgbouncerDelay)
+	require.Equal(t, "10m", decoded.Delays.DeploymentsDelay)
+}
+
+// TestScheduleResponseSinDelaysNoInformaElCampo evita que la interfaz reciba un objeto vacío
+// y lo interprete como "sin escalonado configurado" cuando lo que ocurre es que no se pudo
+// derivar; el campo se omite por completo.
+func TestScheduleResponseSinDelaysNoInformaElCampo(t *testing.T) {
+	data, err := json.Marshal(ScheduleResponse{Tenant: "bdadevdat", Namespaces: map[string]NamespaceInfo{}})
+	require.NoError(t, err)
+	require.NotContains(t, string(data), "delays")
+}
+
 func TestFormatMinutesToDelay(t *testing.T) {
 	require.Equal(t, "0m", formatMinutesToDelay(0))
 	require.Equal(t, "5m", formatMinutesToDelay(5))

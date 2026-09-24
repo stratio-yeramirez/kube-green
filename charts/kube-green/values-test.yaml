@@ -1,0 +1,15 @@
+# Valores del entorno TEST de Banco Pichincha (eks-dya-bda-stratio-test, namespace keos-core).
+#
+# Recogen la configuración que ese cluster ya tiene desplegada. Sin ellos, un upgrade
+# aplicaría los valores por defecto del chart, que son los de DEV, y cambiaría la identidad
+# del entorno en la interfaz además de vaciar CLUSTER_NAME.
+#
+# Uso:
+#   helm upgrade kube-green ./kube-green-<version>.tgz \
+#     -n keos-core -f values-test.yaml
+manager:
+  env:
+    name: "test"
+    color: "#7b3500"
+    label: "Test"
+    clusterName: "eks-dya-bda-stratio-test"

@@ -354,6 +354,32 @@ export function formatMinutesToApiDelay(minutes: number): string {
 }
 
 /**
+ * Translates the delays reported by the API into the fields the form edits.
+ *
+ * The API staggers the wake-up in three steps, so the delay it reports for PgCluster and
+ * HDFSCluster applies to both stores. Statefulsets and cronjobs keep whatever the form
+ * already had, since the API has no counterpart for them.
+ */
+export function fromApiDelays(delays?: WakeDelayConfig): DelayConfig | undefined {
+  if (!delays) return undefined
+
+  const formDelays: DelayConfig = {}
+
+  if (delays.pgHdfsDelay) {
+    formDelays.suspendStatefulSetsPostgres = delays.pgHdfsDelay
+    formDelays.suspendStatefulSetsHdfs = delays.pgHdfsDelay
+  }
+  if (delays.pgbouncerDelay) {
+    formDelays.suspendDeploymentsPgbouncer = delays.pgbouncerDelay
+  }
+  if (delays.deploymentsDelay) {
+    formDelays.suspendDeployments = delays.deploymentsDelay
+  }
+
+  return Object.keys(formDelays).length > 0 ? formDelays : undefined
+}
+
+/**
  * Translates the delays handled by the form into the contract exposed by the API.
  *
  * The form offers one delay per resource type, while the API staggers the wake-up in

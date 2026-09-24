@@ -5,5 +5,5 @@ icon: https://raw.githubusercontent.com/kube-green/kube-green/main/logo/logo.svg
 
 type: application
 
-version: 0.7.28
-appVersion: "0.7.28"
+version: 0.7.29-rc.1
+appVersion: "0.7.29-rc.1"

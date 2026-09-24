@@ -37,7 +37,7 @@ import {
 } from '../../hooks/useTenants'
 import { useQueryClient } from '@tanstack/react-query'
 import { apiClient } from '../../services/api'
-import { convertTimezone, convertFromClusterToUser, getTimezoneDisplayName, convertWeekdaysFromClusterToUser, formatMinutesToDelay, toApiDelays } from '../../utils/timezone'
+import { convertTimezone, convertFromClusterToUser, getTimezoneDisplayName, convertWeekdaysFromClusterToUser, formatMinutesToDelay, toApiDelays, fromApiDelays } from '../../utils/timezone'
 import type { CreateScheduleRequest, ScheduleFormData } from '../../types'
 import { WEEKDAY_NAMES } from '../../types'
 
@@ -562,8 +562,10 @@ export default function ScheduleEditor() {
                                wakeSchedule.annotations?.['kube-green.stratio.com/schedule-description'] || 
                                ''
 
-            // Extraer delays del schedule existente (solo para datastores con staggered wake)
-            let extractedDelays: any = undefined
+            // Delays del schedule existente. Si la API los informa se usan tal cual, que es
+            // la configuración real del cluster; si no (versiones anteriores del backend),
+            // se derivan de las horas de los SleepInfo como respaldo.
+            let extractedDelays: any = fromApiDelays((existingSchedule as any)?.delays)
             const datastoresNS = existingSchedule.namespaces?.['datastores']
             if (datastoresNS && namespaces.includes('datastores')) {
               const datastoresSchedules = Array.isArray(datastoresNS)
@@ -603,7 +605,7 @@ export default function ScheduleEditor() {
                   return (!earliest || t < earliest) ? t : earliest
                 }, '')
 
-                if (baseTime) {
+                if (baseTime && !extractedDelays) {
                   extractedDelays = {}
 
                   timeSourceSchedules.forEach((sched: any) => {

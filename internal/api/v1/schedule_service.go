@@ -1289,6 +1289,10 @@ func (s *ScheduleService) createOrUpdateSecretForSleepInfo(ctx context.Context, 
 type ScheduleResponse struct {
 	Tenant     string                   `json:"tenant"`
 	Namespaces map[string]NamespaceInfo `json:"namespaces"`
+	// Delays es el encendido escalonado que el tenant tiene ahora mismo en el cluster,
+	// derivado de las horas de sus SleepInfo. Permite que la interfaz muestre la
+	// configuración real, incluida la que se haya aplicado directamente sobre el CRD.
+	Delays *DelayConfig `json:"delays,omitempty"`
 }
 
 // NamespaceInfo represents schedule information for a namespace
@@ -1435,10 +1439,21 @@ func (s *ScheduleService) GetSchedule(ctx context.Context, tenant string, namesp
 		namespaces[suffix] = namespaceInfo
 	}
 
-	return &ScheduleResponse{
+	response := &ScheduleResponse{
 		Tenant:     tenant,
 		Namespaces: namespaces,
-	}, nil
+	}
+
+	// Exponer el escalonado que el tenant tiene configurado en el cluster, derivado de las
+	// horas reales de sus SleepInfo. De este modo la interfaz lo muestra tal cual está, sin
+	// recalcularlo por su cuenta, y refleja también los ajustes hechos directamente sobre el CRD.
+	targets := make([]string, 0, len(namespaces))
+	for suffix := range namespaces {
+		targets = append(targets, suffix)
+	}
+	response.Delays = s.extractDelaysFromSchedule(response, targets)
+
+	return response, nil
 }
 
 // buildNamespaceInfo creates a NamespaceInfo from a list of SleepInfos

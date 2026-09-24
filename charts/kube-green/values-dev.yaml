@@ -1,0 +1,14 @@
+# Valores del entorno DEV de Banco Pichincha (eks-dya-bda-stratio-dev, namespace keos-core).
+#
+# Recogen la configuración que ese cluster ya tiene desplegada. El chart trae por defecto
+# los colores de DEV, pero no el CLUSTER_NAME, que sí está puesto en el cluster.
+#
+# Uso:
+#   helm upgrade kube-green ./kube-green-<version>.tgz \
+#     -n keos-core -f values-dev.yaml
+manager:
+  env:
+    name: "dev"
+    color: "#1e3c72"
+    label: "Desarrollo"
+    clusterName: "eks-dya-bda-stratio-dev"
