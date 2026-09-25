@@ -103,6 +103,25 @@ que apunta al mismo cluster y es desde donde se despliega con Helm:
 docker exec keos-installer-pichincha-dev-2 kubectl get crd sleepinfos.kube-green.com -o json
 ```
 
+**Un tenant puede amanecer apagado por un desfase de generación.** Al dormir un recurso, el
+operador guarda su generación para detectar más tarde si alguien lo modificó durante la noche.
+Esa relectura iba contra la caché del informer, que justo después del patch todavía devuelve
+la versión anterior, de modo que se guardaba un número desfasado y por la mañana el wake creía
+que el recurso había cambiado y no lo encendía. El 25/09 le pasó a `bdadevd1a`, que amaneció
+con los PgBouncer parados, seis deployments a cero y Discovery caído; de los 213 recursos
+afectados ese día, 158 diferían en exactamente una unidad. Corregido en `develop` (`fde69a6`)
+pasando a un lector directo a la API. Mientras esa corrección no esté desplegada, los tenants
+sin `ignoreExternalModifications` siguen expuestos; el síntoma en el log del operador es
+`resource modified after sleep and before wake up, skip wake up`. Para desbloquear uno ya
+apagado: activar el flag en sus SleepInfo de wake y lanzar un encendido manual con las
+anotaciones `kube-green.stratio.com/manual-action: wake` y `manual-at` en RFC3339, que caduca
+a los cinco minutos. El encendido manual debe respetar el orden Postgres, PgBouncer y después
+los deploys.
+
+**Un deployment sin restore patch no se enciende.** Si kube-green no tiene guardado el estado
+previo de un recurso, no lo toca: `no restore patch found for resource, skipped`. Es
+deliberado, para no dejarlo peor. Hay que devolverlo a sus réplicas a mano.
+
 **Los SleepInfo se despiertan escalonados.** El patrón estándar del cluster es
 `pg-hdfs` → `pgbouncer` (+5 min) → resto del tenant (+10 min). Si todos comparten hora, las
 aplicaciones arrancan antes que sus bases de datos y entran en bucle de reinicios. Al cambiar
@@ -132,10 +151,22 @@ puede deducirse por fechas.
 
 ## Convenciones
 
-- `go build`, `go vet`, `go test ./...`, y en el frontend `npx tsc --noEmit` y `npm run build`
-  deben quedar en verde antes de commitear. Los tests del controlador usan envtest y tardan
-  alrededor de un minuto.
+- `go build`, `go vet`, `go test ./...`, y en el frontend `npx tsc --noEmit`, `npm test` y
+  `npm run build` deben quedar en verde antes de commitear. Los tests del controlador usan
+  envtest y tardan alrededor de un minuto.
 - `go build ./...` no compila los ficheros `_test.go`: un test que no compila solo lo detecta
   `go vet` o `go test`.
 - Pasar `gofmt -w` sobre lo tocado.
 - Las extensiones propias sobre el código upstream van marcadas con comentarios `EXTENSIÓN:`.
+- Este fichero se actualiza en el mismo commit que el cambio que lo afecta.
+
+### Qué hay cubierto con tests
+
+| Qué | Dónde |
+|---|---|
+| Contrato JSON de los delays y su herencia al reeditar | `internal/api/v1/delays_test.go` |
+| Días de la semana y desplazamiento entre zonas horarias | `internal/api/v1/weekdays_test.go` |
+| La generación se relee de la API y no de la caché | `internal/controller/sleepinfo/resource/reader_test.go` |
+| Traducción de delays en ambos sentidos, días y zonas | `frontend-app/src/utils/timezone.test.ts` |
+
+El frontend usa vitest (`npm test`, o `npm run test:watch` mientras se desarrolla).
