@@ -5,7 +5,7 @@ manager:
   image:
     repository: yeramirez/kube-green
     pullPolicy: IfNotPresent
-    tag: "0.7.29-rc.1"
+    tag: "0.7.29-rc.2"
 
   extraArgs: []
 
@@ -66,7 +66,7 @@ frontend:
   image:
     repository: yeramirez/kube-front
     pullPolicy: IfNotPresent
-    tag: "0.7.29-rc.1"
+    tag: "0.7.29-rc.2"
   ingress:
     enabled: false
     className: ""

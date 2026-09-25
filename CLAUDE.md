@@ -137,6 +137,7 @@ El despliegue se hace con Helm desde el contenedor `keos-installer`, no con
 `RELEASE.md`.
 
 ```bash
+make build                                          # imprescindible, ver aviso
 make docker-build IMG=yeramirez/kube-green:<tag>
 make docker-push  IMG=yeramirez/kube-green:<tag>
 helm package charts/kube-green -d dist/charts
@@ -144,6 +145,18 @@ docker cp dist/charts/kube-green-<tag>.tgz keos-installer-pichincha-dev-2:/tmp/
 docker exec keos-installer-pichincha-dev-2 \
   helm upgrade kube-green /tmp/kube-green-<tag>.tgz -n keos-core -f /tmp/values-test.yaml --wait
 ```
+
+**`make docker-build` no compila Go.** El Dockerfile solo copia el binario ya construido de
+`dist/${TARGETPLATFORM}/kube-green`, de modo que sin un `make build` previo se empaqueta el
+binario de la vez anterior y se publica código viejo bajo una etiqueta nueva. Ocurrió al
+preparar la `0.7.29-rc.2`: la imagen salió con el mismo ID que la `rc.1`. Comprobación rápida
+antes de publicar:
+
+```bash
+docker images --format "{{.Repository}}:{{.Tag}} {{.ID}}" | grep kube-green
+```
+
+Si la etiqueta nueva comparte ID con la anterior, el binario no se recompiló.
 
 Al publicar una imagen conviene etiquetar el commit correspondiente (`deployed/<version>`),
 porque la imagen no lleva grabado el commit del que se construyó y la correspondencia solo
@@ -159,6 +172,9 @@ puede deducirse por fechas.
 - Pasar `gofmt -w` sobre lo tocado.
 - Las extensiones propias sobre el código upstream van marcadas con comentarios `EXTENSIÓN:`.
 - Este fichero se actualiza en el mismo commit que el cambio que lo afecta.
+- Cada tanda de trabajo se cierra con commit y `git push` a `origin`. Nada se queda solo en
+  el disco local: el código de lo que corre en los clusters llegó a existir únicamente en el
+  working tree, y recuperarlo costó una sesión entera.
 
 ### Qué hay cubierto con tests
 

@@ -48,6 +48,16 @@ rules:
   - update
   - watch
 - apiGroups:
+  - kafka.stratio.com
+  resources:
+  - kafkacluster
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
   - kube-green.com
   resources:
   - sleepinfos
@@ -73,6 +83,17 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - opensearch.stratio.com
+  resources:
+  - oscluster
+  - osdashboardses
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
 - apiGroups:
   - postgres.stratio.com
   resources:
