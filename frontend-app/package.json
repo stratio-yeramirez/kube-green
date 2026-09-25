@@ -8,21 +8,23 @@
     "build": "vite build",
     "preview": "vite preview",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
-    "format": "prettier --write \"src/**/*.{ts,tsx,json,css,scss}\""
+    "format": "prettier --write \"src/**/*.{ts,tsx,json,css,scss}\"",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
+    "@emotion/react": "^11.11.1",
+    "@emotion/styled": "^11.11.0",
+    "@mui/icons-material": "^5.15.0",
+    "@mui/material": "^5.15.0",
+    "@tanstack/react-query": "^5.12.0",
+    "axios": "^1.6.2",
+    "date-fns": "^2.30.0",
+    "date-fns-tz": "^2.0.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.20.0",
-    "@tanstack/react-query": "^5.12.0",
-    "zustand": "^4.4.7",
-    "@mui/material": "^5.15.0",
-    "@mui/icons-material": "^5.15.0",
-    "@emotion/react": "^11.11.1",
-    "@emotion/styled": "^11.11.0",
-    "date-fns": "^2.30.0",
-    "date-fns-tz": "^2.0.0",
-    "axios": "^1.6.2"
+    "zustand": "^4.4.7"
   },
   "devDependencies": {
     "@types/react": "^18.2.43",
@@ -35,6 +37,7 @@
     "eslint-plugin-react-refresh": "^0.4.5",
     "prettier": "^3.1.1",
     "typescript": "^5.2.2",
-    "vite": "^5.0.8"
+    "vite": "^5.0.8",
+    "vitest": "^1.6.1"
   }
 }
