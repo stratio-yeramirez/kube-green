@@ -48,6 +48,9 @@ const (
 type SleepInfoReconciler struct {
 	client.Client
 	Clock
+	// APIReader lee directamente de la API, sin caché. Se usa para releer un recurso justo
+	// después de modificarlo, cuando el informer todavía no ha propagado el cambio.
+	APIReader               client.Reader
 	Log                     logr.Logger
 	Scheme                  *runtime.Scheme
 	Metrics                 metrics.Metrics
@@ -298,6 +301,7 @@ func (r *SleepInfoReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	resources, err := jsonpatch.NewResources(ctx, resource.ResourceClient{
 		Client:           r.Client,
+		Reader:           r.APIReader,
 		SleepInfo:        sleepInfoWithPatches,
 		Log:              log,
 		FieldManagerName: r.ManagerName,

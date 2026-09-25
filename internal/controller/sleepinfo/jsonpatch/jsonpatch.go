@@ -251,11 +251,15 @@ func (g managedResources) Sleep(ctx context.Context) error {
 				"resourceName", resource.GetName(),
 				"resourceKind", resource.GetKind(),
 			)
+			// La generación se relee contra la API y no contra la caché del informer: justo
+			// después del patch la caché todavía devuelve la versión anterior, y guardar ese
+			// número hace que al despertar el recurso parezca modificado por un tercero y se
+			// omita su encendido.
 			currentResource := &unstructured.Unstructured{}
 			currentResource.SetGroupVersionKind(resource.GroupVersionKind())
 			currentResource.SetName(resource.GetName())
 			currentResource.SetNamespace(resource.GetNamespace())
-			if err := resourceWrapper.Client.Get(ctx, client.ObjectKeyFromObject(currentResource), currentResource); err != nil {
+			if err := resourceWrapper.ReaderOrClient().Get(ctx, client.ObjectKeyFromObject(currentResource), currentResource); err != nil {
 				g.logger.Error(err, "failed to re-read resource after sleep patch",
 					"resourceName", resource.GetName(),
 					"resourceKind", resource.GetKind(),

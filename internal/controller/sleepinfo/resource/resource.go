@@ -24,10 +24,23 @@ type Resource interface {
 }
 
 type ResourceClient struct {
-	Client           client.Client
+	Client client.Client
+	// Reader lee directamente de la API, sin pasar por la caché del informer. Se usa para
+	// releer un recurso justo después de modificarlo, cuando la caché todavía devuelve la
+	// versión anterior. Si es nil se recurre a Client.
+	Reader           client.Reader
 	SleepInfo        *kubegreenv1alpha1.SleepInfo
 	Log              logr.Logger
 	FieldManagerName string
+}
+
+// ReaderOrClient devuelve el lector directo a la API si está configurado y, si no, el
+// cliente con caché.
+func (r ResourceClient) ReaderOrClient() client.Reader {
+	if r.Reader != nil {
+		return r.Reader
+	}
+	return r.Client
 }
 
 func (r ResourceClient) Patch(ctx context.Context, oldObj, newObj client.Object) error {

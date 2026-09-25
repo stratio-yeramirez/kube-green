@@ -206,6 +206,7 @@ func main() {
 
 	if err = (&sleepinfocontroller.SleepInfoReconciler{
 		Client:                  mgr.GetClient(),
+		APIReader:               mgr.GetAPIReader(),
 		Log:                     ctrl.Log.WithName("controllers").WithName("SleepInfo"),
 		Scheme:                  mgr.GetScheme(),
 		Metrics:                 customMetrics,
