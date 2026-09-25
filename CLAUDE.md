@@ -122,6 +122,15 @@ los deploys.
 previo de un recurso, no lo toca: `no restore patch found for resource, skipped`. Es
 deliberado, para no dejarlo peor. Hay que devolverlo a sus réplicas a mano.
 
+**GenAI está apagado y excluido del ciclo en DEV** desde el 25/09/2026, a petición del
+cliente. Los 34 SleepInfo de los diez namespaces `*genai*` llevan `suspendScheduleUntil` con
+fecha lejana, de modo que el operador no ejecuta ni el apagado ni el encendido y los recursos
+se quedan como están. El apagado se hizo con el propio kube-green (anotación
+`manual-action: sleep`) para que conservara los restore patches, así que la vuelta atrás es
+quitar la suspensión y lanzar un `manual-action: wake`. Copia del estado previo en
+`~/claude_analyze-ticket/genai-apagado-20260925/`. Una acción manual tiene prioridad sobre la
+suspensión, de modo que se puede encender un namespace concreto sin levantar la exclusión.
+
 **Los SleepInfo se despiertan escalonados.** El patrón estándar del cluster es
 `pg-hdfs` → `pgbouncer` (+5 min) → resto del tenant (+10 min). Si todos comparten hora, las
 aplicaciones arrancan antes que sus bases de datos y entran en bucle de reinicios. Al cambiar
